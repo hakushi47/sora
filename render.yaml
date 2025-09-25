@@ -1,20 +1,26 @@
 services:
-  - type: web
-    name: discord-keyword-monitor
-    env: python
-    plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: python main.py --schedule
+  - type: worker # ★ Web ServiceからBackground Workerに変更しました
+    name: discord-keyword-monitor # サービス名
+    env: python # 実行環境
+    plan: free # 無料プラン
+    buildCommand: pip install -r requirements.txt # デプロイ時に実行するビルドコマンド
+    startCommand: python main.py --schedule # サービスの開始コマンド
     envVars:
+      # Discord Botのトークン。Renderのダッシュボードで設定してください。
       - key: DISCORD_BOT_TOKEN
         sync: false
+      # メッセージを投稿するDiscordチャンネルのID。Renderのダッシュボードで設定してください。
       - key: TARGET_CHANNEL_ID
         sync: false
+      # Discordサーバー(Guild)のID。Renderのダッシュボードで設定してください。
       - key: GUILD_ID
         sync: false
+      # Obsidian Vaultのパス（Renderのファイルシステム上）
       - key: OBSIDIAN_VAULT_PATH
         value: /tmp/obsidian
+      # 検索するキーワード
       - key: KEYWORDS
-        value: なう,わず,うぃる
+        value: 'なう,わず,うぃる'
+      # スケジュール実行する時刻 (UTC)
       - key: SCHEDULE_TIME
-        value: 09:00
+        value: '09:00'
