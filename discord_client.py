@@ -1,3 +1,14 @@
+try:
+    import audioop
+except ImportError:
+    import sys
+    # Create a dummy audioop module
+    class DummyAudioop:
+        def __getattr__(self, name):
+            # Return a dummy function or value for any attribute accessed
+            return lambda *args, **kwargs: None
+    sys.modules['audioop'] = DummyAudioop()
+
 import discord
 import logging
 from datetime import datetime, timedelta
