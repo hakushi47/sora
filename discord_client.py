@@ -76,6 +76,42 @@ class DiscordMessageCollector:
             
         return all_messages
 
+    async def collect_messages_from_user_for_day(self, user_id: int, channel_id: int) -> List[Dict[str, Any]]:
+        """指定されたユーザーのその日のメッセージを収集"""
+        collected_messages = []
+        
+        try:
+            channel = self.client.get_channel(channel_id)
+            if not channel:
+                logger.error(f"チャンネル {channel_id} が見つかりません")
+                return collected_messages
+            
+            today = datetime.now().date()
+            
+            async for message in channel.history(limit=1000): # Limit to 1000 messages for performance
+                message_date = message.created_at.date()
+                if message_date == today and message.author.id == user_id:
+                    collected_messages.append({
+                        'channel_id': channel_id,
+                        'channel_name': channel.name,
+                        'user_id': message.author.id,
+                        'username': message.author.display_name or message.author.name,
+                        'content': message.content,
+                        'timestamp': message.created_at.timestamp(),
+                        'message_id': message.id,
+                        'jump_url': message.jump_url,
+                        'guild_id': message.guild.id if message.guild else None,
+                        'guild_name': message.guild.name if message.guild else None
+                    })
+                # メッセージが今日の分より古くなったら終了
+                if message_date < today:
+                    break
+                    
+        except Exception as e:
+            logger.error(f"ユーザー {user_id} のメッセージ収集に失敗: {e}")
+            
+        return collected_messages
+
     async def post_summary(self, messages: List[Dict[str, Any]], channel_id: int = None) -> bool:
         """収集したメッセージのサマリーをDiscordに投稿"""
         if not messages:
@@ -227,7 +263,31 @@ class DiscordMessageCollector:
                 if message.channel.id != self.target_channel_id:
                     return
 
-                # リアクション（絵文字）
+                # Botへのメンションがあるかチェック
+                if self.client.user in message.mentions:
+                    # 他のユーザーへのメンションがあるかチェック
+                    mentioned_users = [user for user in message.mentions if user != self.client.user]
+                    if mentioned_users:
+                        target_user = mentioned_users[0] # 最初のユーザーを対象とする
+                        logger.info(f"Botとユーザー {target_user.display_name} へのメンションを検出")
+
+                        # メンションされたユーザーのその日のメッセージを収集
+                        user_messages = await self.collect_messages_from_user_for_day(
+                            user_id=target_user.id,
+                            channel_id=message.channel.id
+                        )
+
+                        # サマリーを投稿
+                        if user_messages:
+                            summary_embed = self._format_summary_embed(user_messages)
+                            await message.channel.send(f"{target_user.display_name} さんの今日のまとめです:", embed=summary_embed)
+                            logger.info(f"{target_user.display_name} さんのサマリーを投稿しました")
+                        else:
+                            await message.channel.send(f"{target_user.display_name} さんの今日のメッセージは見つかりませんでした。")
+                            logger.info(f"{target_user.display_name} さんのメッセージは見つかりませんでした。")
+                        return # メンション処理が完了したら、通常のリアクションはスキップ
+
+                # 通常のリアクション（絵文字）
                 await message.add_reaction('✅')
 
             except Exception as e:
