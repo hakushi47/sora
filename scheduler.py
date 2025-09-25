@@ -34,8 +34,8 @@ class MessageScheduler:
     
     async def _async_daily_task(self):
         """非同期日次タスク"""
-        # ターゲットチャンネルからキーワードなしで全件収集
-        messages = await self.discord_collector.collect_all_messages_from_channel_no_keyword(
+        # ターゲットチャンネルから全件収集
+        messages = await self.discord_collector.collect_messages_from_channel(
             channel_id=Config.TARGET_CHANNEL_ID, 
             days_back=1
         )

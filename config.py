@@ -10,9 +10,7 @@ class Config:
     TARGET_CHANNEL_ID = int(os.getenv('TARGET_CHANNEL_ID', '0'))
     GUILD_ID = int(os.getenv('GUILD_ID', '0')) if os.getenv('GUILD_ID') else None
 
-    
-    # キーワード設定（デフォルトに「うぃる」を追加）
-    KEYWORDS = os.getenv('KEYWORDS', 'なう,わず,うぃる').split(',')
+
     
     # スケジュール設定
     SCHEDULE_TIME = os.getenv('SCHEDULE_TIME', '09:00')

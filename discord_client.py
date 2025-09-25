@@ -10,15 +10,14 @@ class DiscordMessageCollector:
     def __init__(self):
         self.bot_token = Config.DISCORD_BOT_TOKEN
         self.target_channel_id = Config.TARGET_CHANNEL_ID
-        self.keywords = Config.KEYWORDS
-        self.intents = discord.Intents.default()
+        self.intents = discord.Intents.none() # Start with no intents
         self.intents.message_content = True
         self.intents.guilds = True
         self.intents.messages = True
         self.client = discord.Client(intents=self.intents)
         
     async def collect_messages_from_channel(self, channel_id: int, days_back: int = 1) -> List[Dict[str, Any]]:
-        """指定されたチャンネルからキーワードを含むメッセージを収集"""
+        """指定されたチャンネルからメッセージを収集"""
         collected_messages = []
         
         try:
@@ -31,19 +30,18 @@ class DiscordMessageCollector:
             after_date = datetime.now() - timedelta(days=days_back)
             
             async for message in channel.history(after=after_date, limit=1000):
-                if self._contains_keywords(message.content):
-                    collected_messages.append({
-                        'channel_id': channel_id,
-                        'channel_name': channel.name,
-                        'user_id': message.author.id,
-                        'username': message.author.display_name or message.author.name,
-                        'content': message.content,
-                        'timestamp': message.created_at.timestamp(),
-                        'message_id': message.id,
-                        'jump_url': message.jump_url,
-                        'guild_id': message.guild.id if message.guild else None,
-                        'guild_name': message.guild.name if message.guild else None
-                    })
+                collected_messages.append({
+                    'channel_id': channel_id,
+                    'channel_name': channel.name,
+                    'user_id': message.author.id,
+                    'username': message.author.display_name or message.author.name,
+                    'content': message.content,
+                    'timestamp': message.created_at.timestamp(),
+                    'message_id': message.id,
+                    'jump_url': message.jump_url,
+                    'guild_id': message.guild.id if message.guild else None,
+                    'guild_name': message.guild.name if message.guild else None
+                })
                     
         except Exception as e:
             logger.error(f"チャンネル {channel_id} からのメッセージ取得に失敗: {e}")
@@ -78,15 +76,7 @@ class DiscordMessageCollector:
             logger.error(f"メッセージ収集中にエラーが発生: {e}")
             
         return all_messages
-    
-    def _contains_keywords(self, content: str) -> bool:
-        """テキストにキーワードが含まれているかチェック"""
-        if not content:
-            return False
-            
-        content_lower = content.lower()
-        return any(keyword.lower() in content_lower for keyword in self.keywords)
-    
+
     async def post_summary(self, messages: List[Dict[str, Any]], channel_id: int = None) -> bool:
         """収集したメッセージのサマリーをDiscordに投稿"""
         if not messages:
@@ -116,8 +106,8 @@ class DiscordMessageCollector:
         """メッセージサマリーをDiscord Embedでフォーマット"""
         if not messages:
             embed = discord.Embed(
-                title="📝 キーワード収集サマリー",
-                description="指定されたキーワードを含むメッセージは見つかりませんでした。",
+                title="📝 収集サマリー",
+                description="メッセージは見つかりませんでした。",
                 color=0x00ff00,
                 timestamp=datetime.now()
             )
@@ -132,8 +122,8 @@ class DiscordMessageCollector:
             channel_groups[channel_name].append(message)
         
         embed = discord.Embed(
-            title="📝 キーワード収集サマリー",
-            description=f"**対象キーワード**: {', '.join(self.keywords)}\n**収集件数**: {len(messages)}件",
+            title="📝 収集サマリー",
+            description=f"**収集件数**: {len(messages)}件",
             color=0x00ff00,
             timestamp=datetime.now()
         )
@@ -180,71 +170,7 @@ class DiscordMessageCollector:
         """Botを終了"""
         await self.client.close()
 
-    async def collect_all_messages_from_channel_no_keyword(self, channel_id: int, days_back: int = 1) -> List[Dict[str, Any]]:
-        """指定されたチャンネルからすべてのメッセージを収集（キーワードフィルターなし）"""
-        collected_messages = []
-        
-        try:
-            channel = self.client.get_channel(channel_id)
-            if not channel:
-                logger.error(f"チャンネル {channel_id} が見つかりません")
-                return collected_messages
-            
-            # 指定日数前からのメッセージを取得
-            after_date = datetime.now() - timedelta(days=days_back)
-            
-            async for message in channel.history(after=after_date, limit=1000):
-                # このバージョンではキーワードチェックを行わない
-                collected_messages.append({
-                    'channel_id': channel_id,
-                    'channel_name': channel.name,
-                    'user_id': message.author.id,
-                    'username': message.author.display_name or message.author.name,
-                    'content': message.content,
-                    'timestamp': message.created_at.timestamp(),
-                    'message_id': message.id,
-                    'jump_url': message.jump_url,
-                    'guild_id': message.guild.id if message.guild else None,
-                    'guild_name': message.guild.name if message.guild else None
-                })
-                    
-        except Exception as e:
-            logger.error(f"チャンネル {channel_id} からのメッセージ取得に失敗: {e}")
-            
-        return collected_messages
 
-    async def collect_all_messages_from_channel_no_keyword(self, channel_id: int, days_back: int = 1) -> List[Dict[str, Any]]:
-        """指定されたチャンネルからすべてのメッセージを収集（キーワードフィルターなし）"""
-        collected_messages = []
-        
-        try:
-            channel = self.client.get_channel(channel_id)
-            if not channel:
-                logger.error(f"チャンネル {channel_id} が見つかりません")
-                return collected_messages
-            
-            # 指定日数前からのメッセージを取得
-            after_date = datetime.now() - timedelta(days=days_back)
-            
-            async for message in channel.history(after=after_date, limit=1000):
-                # このバージョンではキーワードチェックを行わない
-                collected_messages.append({
-                    'channel_id': channel_id,
-                    'channel_name': channel.name,
-                    'user_id': message.author.id,
-                    'username': message.author.display_name or message.author.name,
-                    'content': message.content,
-                    'timestamp': message.created_at.timestamp(),
-                    'message_id': message.id,
-                    'jump_url': message.jump_url,
-                    'guild_id': message.guild.id if message.guild else None,
-                    'guild_name': message.guild.name if message.guild else None
-                })
-                    
-        except Exception as e:
-            logger.error(f"チャンネル {channel_id} からのメッセージ取得に失敗: {e}")
-            
-        return collected_messages
 
     async def run_once_collect_and_post(self, days_back: int = 1) -> bool:
         """ログイン→収集→投稿→終了までを一度で実行"""
@@ -281,21 +207,10 @@ class DiscordMessageCollector:
 
 
 
-    def _message_matches(self, content: str) -> bool:
-        return self._contains_keywords(content)
 
-    def _should_react_emoji(self, content: str) -> str:
-        text = content.lower() if content else ""
-        if 'なう' in text:
-            return '🕒'
-        if 'わず' in text:
-            return '✅'
-        if 'うぃる' in text:
-            return '🗓️'
-        return '📌'
 
     async def start_monitor(self):
-        """常時監視モードを開始。該当メッセージにリアクション付与"""
+        """常時監視モードを開始。メッセージにリアクション付与"""
 
         @self.client.event
         async def on_ready():
@@ -309,12 +224,9 @@ class DiscordMessageCollector:
                     return
                 if not message.guild:
                     return
-                if not self._message_matches(message.content):
-                    return
 
                 # リアクション（絵文字）
-                emoji = self._should_react_emoji(message.content)
-                await message.add_reaction(emoji)
+                await message.add_reaction('✅')
 
             except Exception as e:
                 logger.error(f"監視処理でエラー: {e}")
