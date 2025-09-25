@@ -1,0 +1,30 @@
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env
+pip-log.txt
+pip-delete-this-directory.txt
+.tox
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.git
+.mypy_cache
+.pytest_cache
+.hypothesis
+
+.DS_Store
+.vscode
+.idea
+
+# ログファイル
+*.log
+
+# 環境変数ファイル（本番では別途設定）
+.env
