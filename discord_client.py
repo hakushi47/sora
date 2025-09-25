@@ -60,28 +60,16 @@ class DiscordMessageCollector:
         return collected_messages
     
     async def collect_all_messages(self, guild_id: int = None, days_back: int = 1) -> List[Dict[str, Any]]:
-        """すべてのチャンネルからキーワードを含むメッセージを収集"""
+        """指定チャンネルからメッセージを収集"""
         all_messages = []
         
         try:
-            if guild_id:
-                guild = self.client.get_guild(guild_id)
-                if not guild:
-                    logger.error(f"ギルド {guild_id} が見つかりません")
-                    return all_messages
-                channels = guild.text_channels
-            else:
-                # すべてのギルドのテキストチャンネルを取得
-                channels = []
-                for guild in self.client.guilds:
-                    channels.extend(guild.text_channels)
+            # 指定チャンネルからのみメッセージを収集
+            logger.info(f"チャンネル '{self.target_channel_id}' からメッセージを収集中...")
+            messages = await self.collect_messages_from_channel(self.target_channel_id, days_back)
+            all_messages.extend(messages)
             
-            for channel in channels:
-                logger.info(f"チャンネル '{channel.name}' からメッセージを収集中...")
-                messages = await self.collect_messages_from_channel(channel.id, days_back)
-                all_messages.extend(messages)
-                
-                logger.info(f"チャンネル '{channel.name}' から {len(messages)} 件のメッセージを収集")
+            logger.info(f"チャンネル '{self.target_channel_id}' から {len(messages)} 件のメッセージを収集")
         
         except Exception as e:
             logger.error(f"メッセージ収集中にエラーが発生: {e}")
@@ -234,6 +222,9 @@ class DiscordMessageCollector:
                 if message.author.id == self.client.user.id:
                     return
                 if not message.guild:
+                    return
+                # 指定チャンネル以外のメッセージはスキップ
+                if message.channel.id != self.target_channel_id:
                     return
 
                 # リアクション（絵文字）
