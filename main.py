@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Discord キーワード収集Bot
-特定のキーワードを含むメッセージを収集し、毎日定時にDiscordとObsidianに投稿する
+特定のキーワードを含むメッセージを収集し、毎日定時にDiscordに投稿する
 """
 
 import logging
@@ -29,7 +29,7 @@ def main():
     parser.add_argument('--once', action='store_true', help='一回だけ実行（テスト用）')
     parser.add_argument('--debug', action='store_true', help='デバッグモードで実行')
     parser.add_argument('--schedule', action='store_true', help='スケジューラーを開始')
-    parser.add_argument('--monitor', action='store_true', help='常時監視モードで起動（キーワード検出→Obsidian追記＆リアクション）')
+    parser.add_argument('--monitor', action='store_true', help='常時監視モードで起動（キーワード検出→リアクション）')
     
     args = parser.parse_args()
     
@@ -61,10 +61,8 @@ def main():
             # 常時監視モード
             logger.info("常時監視モード")
             from discord_client import DiscordMessageCollector
-            from obsidian_client import ObsidianClient
             import asyncio
             collector = DiscordMessageCollector()
-            collector.use_obsidian(ObsidianClient())
             asyncio.run(collector.start_monitor())
             
         else:

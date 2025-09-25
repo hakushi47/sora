@@ -5,7 +5,6 @@ import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
 from discord_client import DiscordMessageCollector
-from obsidian_client import ObsidianClient
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -13,7 +12,6 @@ logger = logging.getLogger(__name__)
 class MessageScheduler:
     def __init__(self):
         self.discord_collector = DiscordMessageCollector()
-        self.obsidian_client = ObsidianClient()
         self.schedule_time = Config.SCHEDULE_TIME
         
     def setup_schedule(self):
@@ -46,44 +44,7 @@ class MessageScheduler:
         post_success = await self.discord_collector.post_summary(messages)
         if not post_success:
             logger.error("Discordでの収集/投稿に失敗しました")
-            # 失敗してもObsidian処理は続行する
 
-        # Obsidianに日次ノートを作成
-        # 収集したメッセージをそのままObsidian用にも使用
-        obsidian_success = self.obsidian_client.create_daily_note(messages)
-        if obsidian_success:
-            logger.info("Obsidianへの記録が完了しました")
-        else:
-            logger.error("Obsidianへの記録に失敗しました")
-        
-        # 週次サマリーの作成（日曜日の場合）
-        if datetime.now().weekday() == 6:  # 日曜日
-            await self.create_weekly_summary()
-    
-    async def create_weekly_summary(self):
-        """週次サマリーを作成"""
-        logger.info("週次サマリーを作成します")
-        
-        try:
-            # 過去7日間のメッセージを収集
-            messages_by_date = {}
-            
-            for days_back in range(7):
-                date = datetime.now() - timedelta(days=days_back)
-                date_str = date.strftime('%Y-%m-%d')
-                
-                messages = await self.discord_collector.collect_all_messages(
-                    guild_id=Config.GUILD_ID, 
-                    days_back=1
-                )
-                if messages:
-                    messages_by_date[date_str] = messages
-            
-            # 週次サマリーを作成
-            self.obsidian_client.create_weekly_summary(messages_by_date)
-            
-        except Exception as e:
-            logger.error(f"週次サマリーの作成中にエラーが発生しました: {e}")
     
     def run_once(self):
         """一度だけ実行（テスト用）"""

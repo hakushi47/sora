@@ -16,7 +16,6 @@ class DiscordMessageCollector:
         self.intents.guilds = True
         self.intents.messages = True
         self.client = discord.Client(intents=self.intents)
-        self.obsidian = None  # 遅延ロード
         
     async def collect_messages_from_channel(self, channel_id: int, days_back: int = 1) -> List[Dict[str, Any]]:
         """指定されたチャンネルからキーワードを含むメッセージを収集"""
@@ -280,9 +279,7 @@ class DiscordMessageCollector:
         
         return done_flag['success'] and done_flag['ran']
 
-    def use_obsidian(self, obsidian_client):
-        """Obsidianクライアントをセット（監視モード用）"""
-        self.obsidian = obsidian_client
+
 
     def _message_matches(self, content: str) -> bool:
         return self._contains_keywords(content)
@@ -298,9 +295,7 @@ class DiscordMessageCollector:
         return '📌'
 
     async def start_monitor(self):
-        """常時監視モードを開始。該当メッセージをObsidianへ追記し、リアクション付与"""
-        if self.obsidian is None:
-            logger.warning("Obsidianクライアントが未設定です。appendはスキップされます。")
+        """常時監視モードを開始。該当メッセージにリアクション付与"""
 
         @self.client.event
         async def on_ready():
@@ -317,30 +312,9 @@ class DiscordMessageCollector:
                 if not self._message_matches(message.content):
                     return
 
-                record = {
-                    'channel_id': message.channel.id,
-                    'channel_name': message.channel.name,
-                    'user_id': message.author.id,
-                    'username': message.author.display_name or message.author.name,
-                    'content': message.content,
-                    'timestamp': message.created_at.timestamp(),
-                    'message_id': message.id,
-                    'jump_url': message.jump_url,
-                    'guild_id': message.guild.id,
-                    'guild_name': message.guild.name,
-                }
-
-                # Obsidian追記
-                if self.obsidian:
-                    ok = self.obsidian.append_single_message(record)
-                    if ok:
-                        # リアクション（絵文字）
-                        emoji = self._should_react_emoji(message.content)
-                        await message.add_reaction(emoji)
-                else:
-                    # Obsidian無くてもリアクションだけ付与
-                    emoji = self._should_react_emoji(message.content)
-                    await message.add_reaction(emoji)
+                # リアクション（絵文字）
+                emoji = self._should_react_emoji(message.content)
+                await message.add_reaction(emoji)
 
             except Exception as e:
                 logger.error(f"監視処理でエラー: {e}")

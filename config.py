@@ -9,10 +9,7 @@ class Config:
     DISCORD_BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
     TARGET_CHANNEL_ID = int(os.getenv('TARGET_CHANNEL_ID', '0'))
     GUILD_ID = int(os.getenv('GUILD_ID', '0')) if os.getenv('GUILD_ID') else None
-    
-    # Obsidian設定
-    OBSIDIAN_VAULT_PATH = os.getenv('OBSIDIAN_VAULT_PATH', 'C:\\Users\\Ame\\Documents\\Obsidian\\Vault')
-    OBSIDIAN_DAILY_NOTE_TEMPLATE = os.getenv('OBSIDIAN_DAILY_NOTE_TEMPLATE', 'daily-notes')
+
     
     # キーワード設定（デフォルトに「うぃる」を追加）
     KEYWORDS = os.getenv('KEYWORDS', 'なう,わず,うぃる').split(',')

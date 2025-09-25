@@ -15,9 +15,6 @@ services:
       # Discordサーバー(Guild)のID。Renderのダッシュボードで設定してください。
       - key: GUILD_ID
         sync: false
-      # Obsidian Vaultのパス（Renderのファイルシステム上）
-      - key: OBSIDIAN_VAULT_PATH
-        value: /tmp/obsidian
       # 検索するキーワード
       - key: KEYWORDS
         value: 'なう,わず,うぃる'
