@@ -4,7 +4,7 @@ services:
     env: python # 実行環境
     plan: free # 無料プラン
     buildCommand: pip install -r requirements.txt # デプロイ時に実行するビルドコマンド
-    startCommand: python main.py --schedule # サービスの開始コマンド
+    startCommand: python main.py --monitor # サービスの開始コマンド
     envVars:
       # Discord Botのトークン。Renderのダッシュボードで設定してください。
       - key: DISCORD_BOT_TOKEN
