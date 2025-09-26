@@ -265,7 +265,7 @@ class DiscordMessageCollector:
 
                 # Botへのメンションがあるかチェック
                 if self.client.user in message.mentions:
-                    # 他のユーザーへのメンションがあるかチェック
+                    # メンションされたユーザーのまとめリクエストを処理
                     mentioned_users = [user for user in message.mentions if user != self.client.user]
                     if mentioned_users:
                         target_user = mentioned_users[0] # 最初のユーザーを対象とする
@@ -286,6 +286,25 @@ class DiscordMessageCollector:
                             await message.channel.send(f"{target_user.display_name} さんの今日のメッセージは見つかりませんでした。")
                             logger.info(f"{target_user.display_name} さんのメッセージは見つかりませんでした。")
                         return # メンション処理が完了したら、通常のリアクションはスキップ
+                    
+                    # ログリクエストを処理
+                    import re
+                    match = re.match(r'(\d{2}:\d{2})\s+(.+)', message.content)
+                    if match:
+                        requested_time = match.group(1)
+                        log_message_content = match.group(2)
+                        
+                        # Botが代理でメッセージを投稿
+                        post_message = f"{message.author.display_name} ({requested_time}): {log_message_content}"
+                        target_channel = self.client.get_channel(self.target_channel_id)
+                        if target_channel:
+                            await target_channel.send(post_message)
+                            await message.add_reaction('✅') # リクエスト元に確認リアクション
+                            logger.info(f"ログリクエストを処理し、メッセージを投稿しました: {post_message}")
+                        else:
+                            logger.error(f"ログリクエストの投稿先チャンネル {self.target_channel_id} が見つかりません")
+                            await message.add_reaction('❌')
+                        return # ログリクエスト処理が完了したら、通常のリアクションはスキップ
 
                 # 通常のリアクション（絵文字）
                 await message.add_reaction('✅')
