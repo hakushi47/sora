@@ -1,12 +1,13 @@
-# Discord キーワード収集Bot
+# Discord 備品管理Bot
 
-特定のキーワード（「なう」「わず」）を含むDiscordメッセージを収集し、毎日定時にDiscordに投稿するBotです。
+Discord上で備品の保管場所や在庫を管理するためのBotです。
 
 ## 機能
 
-- 指定されたキーワードを含むDiscordメッセージの自動収集
-- 毎日定時（デフォルト: 09:00）にサマリーをDiscordに投稿
-- 複数チャンネルからの同時収集
+- 保管場所の登録・管理
+- 備品の登録・管理
+- 備品の場所を検索
+- 保管場所の中身を一覧表示
 
 ## セットアップ
 
@@ -32,52 +33,53 @@ pip install -r requirements.txt
 
 ### 3. 環境変数の設定
 
-`.env`ファイルを作成し、以下の内容を設定：
+`.env`ファイルを作成し、以下の内容を設定します。
 
 ```env
 # Discord Bot設定
 DISCORD_BOT_TOKEN=your-bot-token-here
-TARGET_CHANNEL_ID=1234567890123456789
+TARGET_CHANNEL_ID=1234567890123456789 # Botが反応するチャンネルID
 GUILD_ID=1234567890123456789
 
-
-# キーワード設定
-KEYWORDS=なう,わず
-
-# スケジュール設定（24時間形式）
-SCHEDULE_TIME=09:00
+# データベース設定 (PostgreSQL)
+DATABASE_URL=postgresql://user:password@host:port/database
 ```
 
 ## 使用方法
 
-### スケジューラーモード（推奨）
+Botに対してメンションは不要です。設定したチャンネル内で以下のメッセージを送信することで、各機能を利用できます。
 
-```bash
-python main.py --schedule
-```
+### 備品の登録・管理
 
-毎日指定時刻に自動実行されます。
+#### 新しい保管場所の追加
+- **あなた:** `新しい保管場所を追加したい`
+- **Bot:** `いいですね！保管場所の名前は？`
+- **あなた:** `（保管場所名）`
+- **Bot:** `「（保管場所名）」を登録しました！`
 
-### 一回限りの実行（テスト用）
+#### 備品の登録
+- **あなた:** `（備品名）を登録したい`
+- **Bot:** `どの保管場所にいれる？`
+- **あなた:** `（保管場所名）`
+- **Bot:** `「（備品名）」を「（保管場所名）」に登録しました！`
 
-```bash
-python main.py --once
-```
+### 備品の検索
 
-### デバッグモード
-### 常時監視モード（新機能）
+#### 備品の場所を検索
+- **あなた:** `（備品名）はどこ？`
+- **Bot:** `「（備品名）」は「（保管場所名）」にあるよ！`
+
+#### 保管場所の中身を確認
+- **あなた:** `（保管場所名）の中身は？`
+- **Bot:** `「（備品名1）」「（備品名2）」が入っているよ！`
+
+### Botの起動
 
 ```bash
 python main.py --monitor
 ```
-
-- メッセージを常時監視し、`なう`/`わず`/`うぃる` 等のキーワードを含む投稿を検出すると、対象メッセージにリアクションを付与します。（例: `なう` → 🕒、`わず` → ✅、`うぃる` → 🗓️）
-
-停止はウィンドウを閉じるか Ctrl+C。
-
-```bash
-python main.py --debug
-```
+Botが常時起動し、メッセージに反応するようになります。
+停止はウィンドウを閉じるか `Ctrl+C` を入力します。
 
 ## ファイル構成
 
@@ -86,7 +88,7 @@ sora/
 ├── main.py              # メインアプリケーション
 ├── config.py            # 設定管理
 ├── discord_client.py    # Discord API クライアント
-├── scheduler.py         # スケジューラー
+├── scheduler.py         # スケジューラー（現在未使用）
 ├── requirements.txt     # 依存関係
 ├── README.md           # このファイル
 └── .env                # 環境変数（要作成）
@@ -94,64 +96,56 @@ sora/
 
 ## 設定項目
 
-| 項目 | 説明 | デフォルト値 |
-|------|------|-------------|
-| `DISCORD_BOT_TOKEN` | Discord Bot Token | 必須 |
-| `TARGET_CHANNEL_ID` | サマリー投稿先チャンネルID | 必須 |
-| `GUILD_ID` | サーバーID（オプション） | なし |
-| `KEYWORDS` | 収集対象キーワード（カンマ区切り） | `なう,わず` |
-| `SCHEDULE_TIME` | 実行時刻（24時間形式） | `09:00` |
+| 項目 | 説明 |
+|------|------|
+| `DISCORD_BOT_TOKEN` | Discord BotのToken |
+| `TARGET_CHANNEL_ID` | Botが反応するチャンネルのID |
+| `GUILD_ID` | Botが動作するサーバーのID |
+| `DATABASE_URL` | PostgreSQLデータベースの接続URL |
 
 ## ログ
 
-ログは`discord_bot.log`ファイルに出力されます。デバッグ情報が必要な場合は`--debug`オプションを使用してください。
+ログは`discord_bot.log`ファイルに出力されます。
 
 ## トラブルシューティング
 
 ### よくある問題
 
-1. **Bot Tokenが無効**
-   - Discord Developer Portalの設定を確認
-   - トークンの権限を確認
+1. **Botが反応しない**
+   - `.env`ファイルの `TARGET_CHANNEL_ID` が正しいか確認してください。
+   - BotがDiscordサーバーに正しく招待されているか確認してください。
+   - Botに必要な権限（メッセージの読み取り・書き込み等）が付与されているか確認してください。
 
-2. **チャンネルにアクセスできない**
-   - Botを対象サーバーに招待
-   - チャンネルの権限設定を確認
-
-
-4. **メッセージが収集されない**
-   - キーワードの設定を確認
-   - Botがサーバーに参加しているか確認
-   - チャンネルIDが正しいか確認
+2. **データベースに接続できない**
+   - `.env`ファイルの `DATABASE_URL` が正しいか確認してください。
+   - データベースが起動しており、外部からの接続を許可しているか確認してください。
 
 ## Render デプロイ手順
 
 ### 1. GitHubにリポジトリをプッシュ
-```bash
-git init
-git add .
-git commit -m "Initial commit"
-git remote add origin https://github.com/yourusername/your-repo.git
-git push -u origin main
-```
+（省略）
 
 ### 2. Renderでサービス作成
-1. [Render](https://render.com)にアクセス
-2. 「New +」→「Web Service」
-3. GitHubリポジトリを選択
-4. 設定：
-   - **Name**: `discord-keyword-monitor`
+1. [Render](https://render.com)にアクセスし、新しいWeb Serviceを作成します。
+2. GitHubリポジトリを選択します。
+3. 以下の設定を行います。
+   - **Name**: `discord-inventory-bot` （または好きな名前）
    - **Environment**: `Python 3`
    - **Build Command**: `pip install -r requirements.txt`
    - **Start Command**: `python main.py --monitor`
 
-### 3. 環境変数設定
-Renderのダッシュボードで以下を設定：
-- `DISCORD_BOT_TOKEN`: あなたのDiscord Bot Token
-- `TARGET_CHANNEL_ID`: 1327475246680244415
-- `GUILD_ID`: 1327472468050448404
-- `KEYWORDS`: `なう,わず,うぃる`
-- `SCHEDULE_TIME`: `09:00`
+### 3. データベースの作成と環境変数設定
+1. Renderで新しくPostgreSQLデータベースを作成します。
+2. 作成したデータベースの「Internal Connection String」をコピーします。
+3. Web Serviceの環境変数に、以下のキーと値を設定します。
+   - `DISCORD_BOT_TOKEN`: あなたのDiscord Bot Token
+   - `TARGET_CHANNEL_ID`: Botを動作させるチャンネルID
+   - `GUILD_ID`: Botを動作させるサーバーID
+   - `DATABASE_URL`: （2でコピーしたデータベースの接続文字列）
+
+### 4. デプロイ
+「Create Web Service」をクリックしてデプロイを開始します。
+
 
 ### 4. デプロイ
 「Create Web Service」をクリックしてデプロイ開始
