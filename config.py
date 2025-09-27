@@ -14,6 +14,9 @@ class Config:
     
     # スケジュール設定
     SCHEDULE_TIME = os.getenv('SCHEDULE_TIME', '09:00')
+
+    # データベース設定
+    DATABASE_URL = os.getenv('DATABASE_URL')
     
     @classmethod
     def validate(cls):

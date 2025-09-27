@@ -11,6 +11,8 @@ except ImportError:
 
 import discord
 import logging
+import asyncpg
+import re
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from config import Config
@@ -21,11 +23,11 @@ class DiscordMessageCollector:
     def __init__(self):
         self.bot_token = Config.DISCORD_BOT_TOKEN
         self.target_channel_id = Config.TARGET_CHANNEL_ID
-        self.intents = discord.Intents.none() # Start with no intents
+        self.intents = discord.Intents.default()
         self.intents.message_content = True
-        self.intents.guilds = True
-        self.intents.messages = True
         self.client = discord.Client(intents=self.intents)
+        self.user_states = {} # ユーザーごとの会話状態を保持
+        self.db_pool = None
         
     async def collect_messages_from_channel(self, channel_id: int, days_back: int = 1) -> List[Dict[str, Any]]:
         """指定されたチャンネルからメッセージを収集"""
@@ -202,7 +204,10 @@ class DiscordMessageCollector:
             logger.error(f"Discord Botの開始に失敗: {e}")
     
     async def close(self):
-        """Botを終了"""
+        """Botを終了し、DB接続を閉じる"""
+        if self.db_pool:
+            await self.db_pool.close()
+            logger.info("データベース接続プールを閉じました。")
         await self.client.close()
 
 
@@ -245,75 +250,181 @@ class DiscordMessageCollector:
 
 
     async def start_monitor(self):
-        """常時監視モードを開始。メッセージにリアクション付与"""
+        """常時監視モードを開始。メッセージに応答"""
 
         @self.client.event
         async def on_ready():
             logger.info(f'{self.client.user} として監視を開始')
+            await self.init_db() # DB初期化
 
         @self.client.event
         async def on_message(message: discord.Message):
-            try:
-                # 自分のメッセージはスキップ
-                if message.author.id == self.client.user.id:
-                    return
-                if not message.guild:
-                    return
-                # 指定チャンネル以外のメッセージはスキップ
-                if message.channel.id != self.target_channel_id:
-                    return
+            if message.author.id == self.client.user.id or not message.guild:
+                return
 
-                # Botへのメンションがあるかチェック
-                if self.client.user in message.mentions:
-                    # メンションされたユーザーのまとめリクエストを処理
-                    mentioned_users = [user for user in message.mentions if user != self.client.user]
-                    if mentioned_users:
-                        target_user = mentioned_users[0] # 最初のユーザーを対象とする
-                        logger.info(f"Botとユーザー {target_user.display_name} へのメンションを検出")
+            # 指定チャンネル以外は無視する設定（必要に応じてコメントアウト解除）
+            # if message.channel.id != self.target_channel_id:
+            #     return
 
-                        # メンションされたユーザーのその日のメッセージを収集
-                        user_messages = await self.collect_messages_from_user_for_day(
-                            user_id=target_user.id,
-                            channel_id=message.channel.id
-                        )
+            user_id = message.author.id
+            content = message.content.strip()
 
-                        # サマリーを投稿
-                        if user_messages:
-                            summary_embed = self._format_summary_embed(user_messages)
-                            await message.channel.send(f"{target_user.display_name} さんの今日のまとめです:", embed=summary_embed)
-                            logger.info(f"{target_user.display_name} さんのサマリーを投稿しました")
-                        else:
-                            await message.channel.send(f"{target_user.display_name} さんの今日のメッセージは見つかりませんでした。")
-                            logger.info(f"{target_user.display_name} さんのメッセージは見つかりませんでした。")
-                        return # メンション処理が完了したら、通常のリアクションはスキップ
-                    
-                    # ログリクエストを処理
-                    import re
-                    match = re.match(r'(\d{2}:\d{2})\s+(.+)', message.content)
-                    if match:
-                        requested_time = match.group(1)
-                        log_message_content = match.group(2)
-                        
-                        # Botが代理でメッセージを投稿
-                        post_message = f"{message.author.display_name} ({requested_time}): {log_message_content}"
-                        target_channel = self.client.get_channel(self.target_channel_id)
-                        if target_channel:
-                            await target_channel.send(post_message)
-                            await message.add_reaction('✅') # リクエスト元に確認リアクション
-                            logger.info(f"ログリクエストを処理し、メッセージを投稿しました: {post_message}")
-                        else:
-                            logger.error(f"ログリクエストの投稿先チャンネル {self.target_channel_id} が見つかりません")
-                            await message.add_reaction('❌')
-                        return # ログリクエスト処理が完了したら、通常のリアクションはスキップ
+            # ユーザーの状態をチェック
+            if user_id in self.user_states:
+                state = self.user_states[user_id]
+                state_type = state.get("type")
 
-                # 通常のリアクション（絵文字）
-                await message.add_reaction('✅')
+                if state_type == "add_storage":
+                    await self.handle_add_storage_name(message, state)
+                elif state_type == "add_item_storage":
+                    await self.handle_add_item_storage_name(message, state)
+                return
 
-            except Exception as e:
-                logger.error(f"監視処理でエラー: {e}")
+            # --- 会話形式のコマンド処理 ---
+            if re.fullmatch(r"新しい収納を追加したい", content):
+                self.user_states[user_id] = {"type": "add_storage"}
+                await message.channel.send("いいよ！収納の名前は？")
+
+            elif match := re.fullmatch(r"(.+)を登録したい", content):
+                item_name = match.group(1)
+                self.user_states[user_id] = {"type": "add_item_storage", "item_name": item_name}
+                await message.channel.send("どの収納に入れる？")
+
+            elif match := re.fullmatch(r"(.+)どこ？", content):
+                item_name = match.group(1)
+                await self.handle_find_item(message, item_name)
+
+            elif match := re.fullmatch(r"(.+)の中身は？", content):
+                storage_name = match.group(1)
+                await self.handle_list_items_in_storage(message, storage_name)
+
 
         try:
             await self.client.start(self.bot_token)
         except Exception as e:
             logger.error(f"Discord 監視開始に失敗: {e}")
+        finally:
+            await self.close()
+
+
+    async def init_db(self):
+        """データベースを初期化し、テーブルを作成する"""
+        self.db_pool = await asyncpg.create_pool(Config.DATABASE_URL)
+        async with self.db_pool.acquire() as conn:
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS guilds (
+                    id BIGINT PRIMARY KEY,
+                    name TEXT NOT NULL
+                );
+            ''')
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS storages (
+                    id SERIAL PRIMARY KEY,
+                    guild_id BIGINT REFERENCES guilds(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL,
+                    UNIQUE(guild_id, name)
+                );
+            ''')
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS items (
+                    id SERIAL PRIMARY KEY,
+                    storage_id INT REFERENCES storages(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(storage_id, name)
+                );
+            ''')
+        logger.info("データベースのテーブルを初期化しました。")
+
+
+    async def handle_add_storage_name(self, message: discord.Message, state: dict):
+        """収納名の入力を処理"""
+        user_id = message.author.id
+        storage_name = message.content.strip()
+        guild_id = message.guild.id
+        guild_name = message.guild.name
+
+        try:
+            async with self.db_pool.acquire() as conn:
+                await conn.execute("INSERT INTO guilds (id, name) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET name = $2", guild_id, guild_name)
+                await conn.execute("INSERT INTO storages (guild_id, name) VALUES ($1, $2)", guild_id, storage_name)
+            await message.channel.send(f"『{storage_name}』を登録したよ！")
+        except asyncpg.UniqueViolationError:
+            await message.channel.send(f"『{storage_name}』はもうあるみたい。")
+        except Exception as e:
+            logger.error(f"収納の追加に失敗: {e}")
+            await message.channel.send("ごめん、登録に失敗しちゃった。")
+        finally:
+            if user_id in self.user_states:
+                del self.user_states[user_id]
+
+    async def handle_add_item_storage_name(self, message: discord.Message, state: dict):
+        """アイテムを入れる収納名の入力を処理"""
+        user_id = message.author.id
+        storage_name = message.content.strip()
+        item_name = state["item_name"]
+        guild_id = message.guild.id
+
+        try:
+            async with self.db_pool.acquire() as conn:
+                storage_record = await conn.fetchrow("SELECT id FROM storages WHERE guild_id = $1 AND name = $2", guild_id, storage_name)
+                if not storage_record:
+                    await message.channel.send(f"『{storage_name}』っていう収納はないみたい。")
+                    # 状態を維持して、再度入力を促すことも可能
+                    return
+
+                storage_id = storage_record['id']
+                await conn.execute(
+                    "INSERT INTO items (storage_id, name) VALUES ($1, $2) ON CONFLICT (storage_id, name) DO UPDATE SET updated_at = CURRENT_TIMESTAMP",
+                    storage_id, item_name
+                )
+            await message.channel.send(f"『{item_name}』を『{storage_name}』に登録したよ！")
+        except Exception as e:
+            logger.error(f"アイテムの登録に失敗: {e}")
+            await message.channel.send("ごめん、登録に失敗しちゃった。")
+        finally:
+            if user_id in self.user_states:
+                del self.user_states[user_id]
+
+    async def handle_find_item(self, message: discord.Message, item_name: str):
+        """アイテムの場所を検索して返信"""
+        guild_id = message.guild.id
+        try:
+            async with self.db_pool.acquire() as conn:
+                result = await conn.fetchrow("""
+                    SELECT s.name FROM items i
+                    JOIN storages s ON i.storage_id = s.id
+                    WHERE i.name = $1 AND s.guild_id = $2
+                """, item_name, guild_id)
+
+            if result:
+                storage_name = result['name']
+                await message.channel.send(f"『{item_name}』は『{storage_name}』にあるよ！")
+            else:
+                await message.channel.send(f"『{item_name}』は見つからないみたい。")
+        except Exception as e:
+            logger.error(f"アイテムの検索に失敗: {e}")
+            await message.channel.send("ごめん、検索中にエラーが起きちゃった。")
+
+    async def handle_list_items_in_storage(self, message: discord.Message, storage_name: str):
+        """収納の中身を一覧表示"""
+        guild_id = message.guild.id
+        try:
+            async with self.db_pool.acquire() as conn:
+                results = await conn.fetch("""
+                    SELECT i.name FROM items i
+                    JOIN storages s ON i.storage_id = s.id
+                    WHERE s.name = $1 AND s.guild_id = $2
+                    ORDER BY i.name
+                """, storage_name, guild_id)
+
+            if results:
+                item_names = [f"『{r['name']}』" for r in results]
+                await message.channel.send("、".join(item_names) + "が入ってるよ！")
+            else:
+                await message.channel.send(f"『{storage_name}』には何もないみたい。")
+        except Exception as e:
+            logger.error(f"収納アイテムのリスト取得に失敗: {e}")
+            await message.channel.send("ごめん、中身を確認中にエラーが起きちゃった。")
+
 
