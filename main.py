@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
 """
-Discord キーワード収集Bot
-特定のキーワードを含むメッセージを収集し、毎日定時にDiscordに投稿する
+Discord Bot Runner
 """
 
 import logging
-import argparse
 import sys
-from datetime import datetime
 from config import Config
-from scheduler import MessageScheduler
+from discord_client import SoraBot
 
 # ログ設定
 def setup_logging(level=logging.INFO):
@@ -25,18 +22,7 @@ def setup_logging(level=logging.INFO):
 
 def main():
     """メイン関数"""
-    parser = argparse.ArgumentParser(description='Discord キーワード収集Bot')
-    parser.add_argument('--once', action='store_true', help='一回だけ実行（テスト用）')
-    parser.add_argument('--debug', action='store_true', help='デバッグモードで実行')
-    parser.add_argument('--schedule', action='store_true', help='スケジューラーを開始')
-    parser.add_argument('--monitor', action='store_true', help='常時監視モードで起動（キーワード検出→リアクション）')
-    
-    args = parser.parse_args()
-    
-    # ログレベル設定
-    log_level = logging.DEBUG if args.debug else logging.INFO
-    setup_logging(log_level)
-    
+    setup_logging()
     logger = logging.getLogger(__name__)
     
     try:
@@ -44,31 +30,9 @@ def main():
         Config.validate()
         logger.info("設定の検証が完了しました")
         
-        # スケジューラー/監視の初期化
-        scheduler = MessageScheduler()
-        
-        if args.once:
-            # 一回だけ実行
-            logger.info("一回限りの実行モード")
-            scheduler.run_once()
-            
-        elif args.schedule:
-            # スケジューラーを開始
-            logger.info("スケジューラーモード")
-            scheduler.start_scheduler()
-        
-        elif args.monitor:
-            # 常時監視モード
-            logger.info("常時監視モード")
-            from discord_client import DiscordMessageCollector
-            import asyncio
-            collector = DiscordMessageCollector()
-            asyncio.run(collector.start_monitor())
-            
-        else:
-            # デフォルトはスケジューラーモード
-            logger.info("デフォルトモード: スケジューラーを開始")
-            scheduler.start_scheduler()
+        # Botの起動
+        bot = SoraBot()
+        bot.run_bot()
             
     except ValueError as e:
         logger.error(f"設定エラー: {e}")
