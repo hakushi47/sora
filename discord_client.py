@@ -29,6 +29,18 @@ class DiscordMessageCollector:
         self.user_states = {} # ユーザーごとの会話状態を保持
         self.db_pool = None
         
+        # キーワードとリアクションのマッピングを解析
+        self.keyword_reactions = {}
+        if Config.KEYWORD_REACTIONS:
+            try:
+                self.keyword_reactions = {
+                    item.split(':')[0].strip(): item.split(':')[1].strip()
+                    for item in Config.KEYWORD_REACTIONS.split(',')
+                }
+                logger.info(f"キーワードリアクションを読み込みました: {self.keyword_reactions}")
+            except IndexError:
+                logger.error("KEYWORD_REACTIONSのフォーマットが不正です。'key:value,key2:value2' の形式で設定してください。")
+        
     async def collect_messages_from_channel(self, channel_id: int, days_back: int = 1) -> List[Dict[str, Any]]:
         """指定されたチャンネルからメッセージを収集"""
         collected_messages = []
@@ -261,6 +273,14 @@ class DiscordMessageCollector:
         async def on_message(message: discord.Message):
             if message.author.id == self.client.user.id or not message.guild:
                 return
+
+            # キーワードリアクション処理
+            for keyword, reaction in self.keyword_reactions.items():
+                if keyword in message.content:
+                    try:
+                        await message.add_reaction(reaction)
+                    except discord.HTTPException as e:
+                        logger.warning(f"リアクションの追加に失敗しました: {reaction} ({e})")
 
             # 指定チャンネル以外は無視する設定（必要に応じてコメントアウト解除）
             # if message.channel.id != self.target_channel_id:

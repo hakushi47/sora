@@ -15,6 +15,9 @@ class Config:
     # スケジュール設定
     SCHEDULE_TIME = os.getenv('SCHEDULE_TIME', '09:00')
 
+    # キーワードとリアクションのマッピング
+    KEYWORD_REACTIONS = os.getenv('KEYWORD_REACTIONS', 'なう:🕒,わず:✅,うぃる:🗓️')
+
     # データベース設定
     DATABASE_URL = os.getenv('DATABASE_URL')
     
