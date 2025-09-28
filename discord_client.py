@@ -709,35 +709,44 @@ class FinanceCog(commands.Cog):
         )
         await interaction.response.send_message(message)
 
-    @app_commands.command(name="spend", description="生活費・貯金・探検隊予算から支出を記録するぞ！")
-    @app_commands.describe(amount="支出した金額", category="支出のカテゴリ")
+    @app_commands.command(name="spend", description="支出を記録するぞ！支払い元を指定しない場合は『生活費』から引かれる。")
+    @app_commands.describe(amount="支出した金額", category="支出の内容", from_bucket="どの予算から支払うか")
     @app_commands.choices(category=[
+        app_commands.Choice(name="食費", value="食費"),
+        app_commands.Choice(name="日用品費", value="日用品費"),
+        app_commands.Choice(name="交通費", value="交通費"),
+        app_commands.Choice(name="家賃", value="家賃"),
+        app_commands.Choice(name="交際費", value="交際費"),
+        app_commands.Choice(name="娯楽費", value="娯楽費"),
+        app_commands.Choice(name="医療費", value="医療費"),
+        app_commands.Choice(name="その他", value="その他"),
+    ], from_bucket=[
         app_commands.Choice(name="生活費", value="生活費"),
-        app_commands.Choice(name="貯金", value="貯金"),
         app_commands.Choice(name="探検隊予算", value="探検隊予算"),
     ])
-    async def spend(self, interaction: discord.Interaction, category: app_commands.Choice[str], amount: int):
+    async def spend(self, interaction: discord.Interaction, amount: int, category: app_commands.Choice[str], from_bucket: app_commands.Choice[str] = None):
         if amount <= 0:
             await interaction.response.send_message("おい隊員！支出は正の整数で頼む！")
             return
 
         user_id = interaction.user.id
         category_name = category.value
+        source_bucket_name = from_bucket.value if from_bucket else "生活費"
 
         async with self.bot.db_pool.acquire() as conn:
             async with conn.transaction():
                 # 現在の残高を確認
-                current_balance_record = await conn.fetchrow("SELECT balance FROM user_balances WHERE user_id = $1 AND category = $2", user_id, category_name)
+                current_balance_record = await conn.fetchrow("SELECT balance FROM user_balances WHERE user_id = $1 AND category = $2", user_id, source_bucket_name)
                 current_balance = current_balance_record['balance'] if current_balance_record else 0
 
                 if current_balance < amount:
-                    await interaction.response.send_message(f"おい隊員！ {category_name}の残高が足りないぞ！ (現在: {current_balance}円)")
+                    await interaction.response.send_message(f"おい隊員！ {source_bucket_name}の残高が足りないぞ！ (現在: {current_balance}円)")
                     return
 
                 # 残高を更新
                 await conn.execute("""
                     UPDATE user_balances SET balance = balance - $1 WHERE user_id = $2 AND category = $3
-                    """, amount, user_id, category_name)
+                    """, amount, user_id, source_bucket_name)
 
                 # 取引履歴を記録
                 await conn.execute("""
@@ -745,6 +754,14 @@ class FinanceCog(commands.Cog):
                     VALUES ($1, 'spend', $2, $3);
                     """, user_id, category_name, amount)
         
+        # アイコンのマッピング
+        icons = {"生活費": "🏠", "貯金": "🐷", "探検隊予算": "🛡"}
+        icon = icons.get(source_bucket_name, "💰")
+
+        message = (
+            f"{icon} {source_bucket_name}から【{category_name}】として {amount}円を消費\n"
+            f"→ {get_captain_quote('spend')}"
+        )
         await interaction.response.send_message(message)
 
     @app_commands.command(name="report", description="指定した期間の収支報告書を作成するぞ！")
