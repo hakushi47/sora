@@ -651,66 +651,118 @@ class FinanceCog(commands.Cog):
     def __init__(self, bot: SoraBot):
         self.bot = bot
 
-    @app_commands.command(name="balance", description="現在の生活費・貯金・探検隊予算の残高を確認するぞ！")
+    @app_commands.command(name="balance", description="現在の全財産を確認するぞ！")
     async def balance(self, interaction: discord.Interaction):
         user_id = interaction.user.id
         async with self.bot.db_pool.acquire() as conn:
             records = await conn.fetch("SELECT category, balance FROM user_balances WHERE user_id = $1", user_id)
         
         balance_data = {record['category']: record['balance'] for record in records}
-        living_costs = balance_data.get("生活費", 0)
+        pote_wallet = balance_data.get("ぽて財布", 0)
+        nushi_wallet = balance_data.get("ぬし財布", 0)
         savings = balance_data.get("貯金", 0)
         expedition_budget = balance_data.get("探検隊予算", 0)
 
         message = (
-            f"🏠 生活費残り: {living_costs}円\n"
+            f"👩 ぽて財布: {pote_wallet}円\n"
+            f"👨 ぬし財布: {nushi_wallet}円\n"
             f"🐷 貯金: {savings}円\n"
             f"🛡 探検隊予算: {expedition_budget}円\n"
             f"→ {get_captain_quote('balance')}"
         )
         await interaction.response.send_message(message)
 
-    @app_commands.command(name="salary", description="給料を受け取り、生活費・貯金・探検隊予算に振り分けるぞ！")
-    @app_commands.describe(amount="受け取った給料の金額")
-    async def salary(self, interaction: discord.Interaction, amount: int):
+    @app_commands.command(name="salary", description="給料を受け取り、指定した財布に入金するぞ！")
+    @app_commands.describe(amount="受け取った給料の金額", target_wallet="入金先の財布")
+    @app_commands.choices(target_wallet=[
+        app_commands.Choice(name="ぽて財布", value="ぽて財布"),
+        app_commands.Choice(name="ぬし財布", value="ぬし財布"),
+    ])
+    async def salary(self, interaction: discord.Interaction, amount: int, target_wallet: app_commands.Choice[str]):
         if amount <= 0:
             await interaction.response.send_message("おい隊員！給料は正の整数で頼む！")
             return
 
         user_id = interaction.user.id
-        
-        # 金額を振り分け
-        living_costs = int(amount * 0.5)
-        savings = int(amount * 0.3)
-        expedition_budget = amount - living_costs - savings # 残りを予算に
+        wallet_name = target_wallet.value
 
         async with self.bot.db_pool.acquire() as conn:
             async with conn.transaction():
-                # 各カテゴリの残高を更新
+                # 財布の残高を更新
                 await conn.execute("""
                     INSERT INTO user_balances (user_id, category, balance)
-                    VALUES ($1, '生活費', $2), ($1, '貯金', $3), ($1, '探検隊予算', $4)
+                    VALUES ($1, $2, $3)
                     ON CONFLICT (user_id, category) DO UPDATE
-                    SET balance = user_balances.balance + excluded.balance;
-                    """, user_id, living_costs, savings, expedition_budget)
+                    SET balance = user_balances.balance + $3;
+                    """, user_id, wallet_name, amount)
 
                 # 取引履歴を記録
                 await conn.execute("""
                     INSERT INTO transactions (user_id, transaction_type, category, amount)
-                    VALUES ($1, 'salary', NULL, $2);
-                    """, user_id, amount)
+                    VALUES ($1, 'salary', $2, $3);
+                    """, user_id, wallet_name, amount)
 
         message = (
-            f"💰 今日の給料: {amount}円\n"
-            f"🏠 生活費: +{living_costs}円\n"
-            f"🐷 貯金: +{savings}円\n"
-            f"🛡 探検隊予算: +{expedition_budget}円\n"
+            f"💰 {wallet_name}に給料 {amount}円を入金したぞ！\n"
             f"→ {get_captain_quote('salary')}"
         )
         await interaction.response.send_message(message)
 
-    @app_commands.command(name="spend", description="支出を記録するぞ！支払い元を指定しない場合は『生活費』から引かれる。")
-    @app_commands.describe(amount="支出した金額", category="支出の内容", from_bucket="どの予算から支払うか")
+    @app_commands.command(name="transfer", description="財布・貯金・予算の間で資金を移動するぞ！")
+    @app_commands.describe(amount="移動する金額", from_wallet="移動元の財布/カテゴリ", to_wallet="移動先の財布/カテゴリ")
+    @app_commands.choices(from_wallet=[
+        app_commands.Choice(name="ぽて財布", value="ぽて財布"),
+        app_commands.Choice(name="ぬし財布", value="ぬし財布"),
+        app_commands.Choice(name="貯金", value="貯金"),
+        app_commands.Choice(name="探検隊予算", value="探検隊予算"),
+    ], to_wallet=[
+        app_commands.Choice(name="ぽて財布", value="ぽて財布"),
+        app_commands.Choice(name="ぬし財布", value="ぬし財布"),
+        app_commands.Choice(name="貯金", value="貯金"),
+        app_commands.Choice(name="探検隊予算", value="探検隊予算"),
+    ])
+    async def transfer(self, interaction: discord.Interaction, amount: int, from_wallet: app_commands.Choice[str], to_wallet: app_commands.Choice[str]):
+        if amount <= 0:
+            await interaction.response.send_message("おい隊員！移動する金額は正の整数で頼む！")
+            return
+
+        user_id = interaction.user.id
+        from_name = from_wallet.value
+        to_name = to_wallet.value
+
+        if from_name == to_name:
+            await interaction.response.send_message("移動元と移動先が同じだぞ！確認しろ！")
+            return
+
+        async with self.bot.db_pool.acquire() as conn:
+            async with conn.transaction():
+                # 移動元の残高を確認
+                current_balance_record = await conn.fetchrow("SELECT balance FROM user_balances WHERE user_id = $1 AND category = $2", user_id, from_name)
+                current_balance = current_balance_record['balance'] if current_balance_record else 0
+
+                if current_balance < amount:
+                    await interaction.response.send_message(f"おい隊員！ {from_name}の残高が足りないぞ！ (現在: {current_balance}円)")
+                    return
+
+                # 移動元の残高を減らす
+                await conn.execute("UPDATE user_balances SET balance = balance - $1 WHERE user_id = $2 AND category = $3", amount, user_id, from_name)
+                # 移動先の残高を増やす
+                await conn.execute("INSERT INTO user_balances (user_id, category, balance) VALUES ($1, $2, $3) ON CONFLICT (user_id, category) DO UPDATE SET balance = user_balances.balance + $3", user_id, to_name, amount)
+
+                # 取引履歴を記録 (振替)
+                await conn.execute("""
+                    INSERT INTO transactions (user_id, transaction_type, category, amount)
+                    VALUES ($1, 'transfer', $2, $3);
+                    """, user_id, f"{from_name}→{to_name}", amount)
+
+        message = (
+            f"🔄 {from_name} から {to_name} へ {amount}円を移動したぞ！\n"
+            f"→ 資金の再配分、見事だ！"
+        )
+        await interaction.response.send_message(message)
+
+    @app_commands.command(name="spend", description="支出を記録するぞ！")
+    @app_commands.describe(amount="支出した金額", category="支出の内容", from_wallet="どの財布から支払ったか")
     @app_commands.choices(category=[
         app_commands.Choice(name="食費", value="食費"),
         app_commands.Choice(name="日用品費", value="日用品費"),
@@ -720,33 +772,34 @@ class FinanceCog(commands.Cog):
         app_commands.Choice(name="娯楽費", value="娯楽費"),
         app_commands.Choice(name="医療費", value="医療費"),
         app_commands.Choice(name="その他", value="その他"),
-    ], from_bucket=[
-        app_commands.Choice(name="生活費", value="生活費"),
+    ], from_wallet=[
+        app_commands.Choice(name="ぽて財布", value="ぽて財布"),
+        app_commands.Choice(name="ぬし財布", value="ぬし財布"),
         app_commands.Choice(name="探検隊予算", value="探検隊予算"),
     ])
-    async def spend(self, interaction: discord.Interaction, amount: int, category: app_commands.Choice[str], from_bucket: app_commands.Choice[str] = None):
+    async def spend(self, interaction: discord.Interaction, amount: int, category: app_commands.Choice[str], from_wallet: app_commands.Choice[str]):
         if amount <= 0:
             await interaction.response.send_message("おい隊員！支出は正の整数で頼む！")
             return
 
         user_id = interaction.user.id
         category_name = category.value
-        source_bucket_name = from_bucket.value if from_bucket else "生活費"
+        source_wallet_name = from_wallet.value
 
         async with self.bot.db_pool.acquire() as conn:
             async with conn.transaction():
                 # 現在の残高を確認
-                current_balance_record = await conn.fetchrow("SELECT balance FROM user_balances WHERE user_id = $1 AND category = $2", user_id, source_bucket_name)
+                current_balance_record = await conn.fetchrow("SELECT balance FROM user_balances WHERE user_id = $1 AND category = $2", user_id, source_wallet_name)
                 current_balance = current_balance_record['balance'] if current_balance_record else 0
 
                 if current_balance < amount:
-                    await interaction.response.send_message(f"おい隊員！ {source_bucket_name}の残高が足りないぞ！ (現在: {current_balance}円)")
+                    await interaction.response.send_message(f"おい隊員！ {source_wallet_name}の残高が足りないぞ！ (現在: {current_balance}円)")
                     return
 
                 # 残高を更新
                 await conn.execute("""
                     UPDATE user_balances SET balance = balance - $1 WHERE user_id = $2 AND category = $3
-                    """, amount, user_id, source_bucket_name)
+                    """, amount, user_id, source_wallet_name)
 
                 # 取引履歴を記録
                 await conn.execute("""
@@ -755,11 +808,11 @@ class FinanceCog(commands.Cog):
                     """, user_id, category_name, amount)
         
         # アイコンのマッピング
-        icons = {"生活費": "🏠", "貯金": "🐷", "探検隊予算": "🛡"}
-        icon = icons.get(source_bucket_name, "💰")
+        icons = {"ぽて財布": "👩", "ぬし財布": "👨", "探検隊予算": "🛡"}
+        icon = icons.get(source_wallet_name, "💰")
 
         message = (
-            f"{icon} {source_bucket_name}から【{category_name}】として {amount}円を消費\n"
+            f"{icon} {source_wallet_name}から【{category_name}】として {amount}円を消費\n"
             f"→ {get_captain_quote('spend')}"
         )
         await interaction.response.send_message(message)
