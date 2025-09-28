@@ -44,10 +44,19 @@ class SoraBot(commands.Bot):
                 logger.error("KEYWORD_REACTIONSのフォーマットが不正です。'key:value,key2:value2' の形式で設定してください。")
 
     async def on_ready(self):
-        logger.info(f'{self.user} として監視を開始')
-        await self.init_db() # DB初期化
-        await self.add_cog(FinanceCog(self))
-        await self.tree.sync()
+        try:
+            logger.info(f'{self.user} として監視を開始')
+            await self.init_db() # DB初期化
+            logger.info("データベースの初期化が完了しました。")
+
+            await self.add_cog(FinanceCog(self))
+            logger.info("FinanceCogをロードしました。")
+
+            await self.tree.sync()
+            logger.info("コマンドツリーを同期しました。Botの準備完了です！")
+
+        except Exception as e:
+            logger.error("on_readyで致命的なエラーが発生しました。", exc_info=True)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
