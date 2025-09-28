@@ -30,7 +30,7 @@ class Config:
         if missing_vars:
             raise ValueError(f"以下の環境変数が設定されていません: {', '.join(missing_vars)}")
         
-        if cls.TARGET_CHANNEL_ID == 0:
-            raise ValueError("TARGET_CHANNEL_IDが設定されていません")
+        if not cls.TARGET_CHANNEL_IDS or cls.TARGET_CHANNEL_IDS == [0]:
+            raise ValueError("TARGET_CHANNEL_IDSが設定されていません")
         
         return True
