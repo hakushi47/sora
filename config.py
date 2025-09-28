@@ -7,7 +7,7 @@ load_dotenv()
 class Config:
     # Discord設定
     DISCORD_BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
-    TARGET_CHANNEL_ID = int(os.getenv('TARGET_CHANNEL_ID', '0'))
+    TARGET_CHANNEL_IDS = [int(cid.strip()) for cid in os.getenv('TARGET_CHANNEL_IDS', '0').split(',')]
     GUILD_ID = int(os.getenv('GUILD_ID', '0')) if os.getenv('GUILD_ID') else None
 
 

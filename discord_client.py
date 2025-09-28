@@ -28,7 +28,7 @@ class SoraBot(commands.Bot):
         intents.message_content = True
         super().__init__(command_prefix="!", intents=intents)
         self.bot_token = Config.DISCORD_BOT_TOKEN
-        self.target_channel_id = Config.TARGET_CHANNEL_ID
+        self.target_channel_ids = Config.TARGET_CHANNEL_IDS
         self.user_states = {} # ユーザーごとの会話状態を保持
         self.db_pool = None
         
@@ -65,7 +65,7 @@ class SoraBot(commands.Bot):
             return
 
         # 指定チャンネルのメッセージでなければ無視
-        if message.channel.id != self.target_channel_id:
+        if message.channel.id not in self.target_channel_ids:
             return
 
         # メッセージをDBに記録
