@@ -286,6 +286,25 @@ class DiscordMessageCollector:
             # if message.channel.id != self.target_channel_id:
             #     return
 
+            # Botへのメンションをチェック
+            if self.client.user in message.mentions:
+                mentioned_users = [user for user in message.mentions if user != self.client.user]
+                if mentioned_users:
+                    target_user = mentioned_users[0] # 最初のメンションユーザーを対象とする
+                    logger.info(f"ユーザー {target_user.display_name} のサマリーリクエストを受信")
+
+                    user_messages = await self.collect_messages_from_user_for_day(
+                        user_id=target_user.id,
+                        channel_id=message.channel.id
+                    )
+
+                    if user_messages:
+                        summary_embed = self._format_summary_embed(user_messages)
+                        await message.channel.send(f"{target_user.display_name}さんの本日のまとめです:", embed=summary_embed)
+                    else:
+                        await message.channel.send(f"{target_user.display_name}さんの本日のメッセージは見つかりませんでした。")
+                    return # サマリー処理後は他のコマンドを評価しない
+
             user_id = message.author.id
             content = message.content.strip()
 
