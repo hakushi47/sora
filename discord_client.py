@@ -184,8 +184,9 @@ class DiscordMessageCollector:
                 timestamp = datetime.fromtimestamp(message['timestamp'])
                 time_str = timestamp.strftime('%H:%M')
                 
-                # メッセージ内容を短縮
+                # メッセージ内容を短縮し、キーワードを削除
                 content = message['content']
+                content = re.sub(r'(なう|わず|うぃる)', '', content).strip()
                 if len(content) > 100:
                     content = content[:100] + "..."
                 
