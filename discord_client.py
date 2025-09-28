@@ -479,7 +479,7 @@ class SoraBot(commands.Bot):
                     channel_id BIGINT,
                     user_id BIGINT,
                     content TEXT,
-                    created_at TIMESTAMP
+                    created_at TIMESTAMP WITH TIME ZONE
                 );
             ''')
         logger.info("messagesテーブルを初期化しました。")
