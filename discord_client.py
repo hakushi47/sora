@@ -24,8 +24,9 @@ logger = logging.getLogger(__name__)
 
 class SoraBot(commands.Bot):
     def __init__(self):
-        super().__init__(command_prefix="!", intents=discord.Intents.default())
-        self.intents.message_content = True
+        intents = discord.Intents.default()
+        intents.message_content = True
+        super().__init__(command_prefix="!", intents=intents)
         self.bot_token = Config.DISCORD_BOT_TOKEN
         self.target_channel_id = Config.TARGET_CHANNEL_ID
         self.user_states = {} # ユーザーごとの会話状態を保持
