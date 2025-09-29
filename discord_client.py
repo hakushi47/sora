@@ -853,6 +853,13 @@ class FinanceCog(commands.Cog):
                 if t['category'] in spend_by_category:
                     spend_by_category[t['category']] += t['amount']
 
+        message = (
+            f"📅 {title}\n"
+            f"💰 総収入: {total_salary}円\n"
+            f"🏠 生活費消費: {spend_by_category['生活費']}円\n"
+            f"🐷 貯金消費: {spend_by_category['貯金']}円\n"
+            f"🛡 探検隊予算使用: {spend_by_category['探検隊予算']}円\n"
+            f"→ {get_captain_quote('report')}"
         )
         await interaction.response.send_message(message)
 
