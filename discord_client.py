@@ -662,10 +662,12 @@ class FinanceCog(commands.Cog):
         nushi_wallet = balance_data.get("ぬし財布", 0)
         savings = balance_data.get("貯金", 0)
         expedition_budget = balance_data.get("探検隊予算", 0)
+        living_expenses = pote_wallet + nushi_wallet
 
         message = (
             f"👩 ぽて財布: {pote_wallet}円\n"
             f"👨 ぬし財布: {nushi_wallet}円\n"
+            f"🏠 生活費残り: {living_expenses}円\n"
             f"🐷 貯金: {savings}円\n"
             f"🛡 探検隊予算: {expedition_budget}円\n"
             f"→ {get_captain_quote('balance')}"
