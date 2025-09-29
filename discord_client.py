@@ -853,13 +853,20 @@ class FinanceCog(commands.Cog):
                 if t['category'] in spend_by_category:
                     spend_by_category[t['category']] += t['amount']
 
-        message = (
-            f"📅 {title}\n"
-            f"💰 総収入: {total_salary}円\n"
-            f"🏠 生活費消費: {spend_by_category['生活費']}円\n"
-            f"🐷 貯金消費: {spend_by_category['貯金']}円\n"
-            f"🛡 探検隊予算使用: {spend_by_category['探検隊予算']}円\n"
-            f"→ {get_captain_quote('report')}"
         )
         await interaction.response.send_message(message)
+
+    @app_commands.command(name="reset_finance", description="あなたの財務データをすべてリセットします。")
+    async def reset_finance(self, interaction: discord.Interaction):
+        user_id = interaction.user.id
+        
+        async with self.bot.db_pool.acquire() as conn:
+            async with conn.transaction():
+                # ユーザーの残高と取引履歴を削除
+                await conn.execute("DELETE FROM user_balances WHERE user_id = $1", user_id)
+                await conn.execute("DELETE FROM transactions WHERE user_id = $1", user_id)
+
+        await interaction.response.send_message("🧹 あなたの財務データをすべてリセットしました。")
+
+
 
