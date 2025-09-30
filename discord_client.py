@@ -717,6 +717,7 @@ class FinanceCog(commands.Cog):
 
         message = (
             f"💰 給料 {amount}円を受け取り、割り振ったぞ！\n"
+            f"👩 ぽて財布: +{pote_wallet_amount}円\n"
             f"👨 ぬし財布: +{nushi_wallet_amount}円\n"
             f"🐷 貯金: +{savings_amount}円\n"
             f"🛡 探検隊予算: +{expedition_budget_amount}円\n"
