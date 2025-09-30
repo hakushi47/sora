@@ -684,30 +684,30 @@ class FinanceCog(commands.Cog):
         user_id = interaction.user.id
 
         # 金額を割り振る
-        pote_wallet_amount = amount // 4
-        nushi_wallet_amount = amount // 4
+        nushi_wallet_amount = amount // 2
         savings_amount = (amount * 3) // 10
         expedition_budget_amount = (amount * 2) // 10
+        pote_wallet_amount = 0
         
         # 残りを貯金に加算
-        remainder = amount - pote_wallet_amount - nushi_wallet_amount - savings_amount - expedition_budget_amount
+        remainder = amount - nushi_wallet_amount - savings_amount - expedition_budget_amount
         savings_amount += remainder
 
         async with self.bot.db_pool.acquire() as conn:
             async with conn.transaction():
                 # 各カテゴリの残高を更新
                 for category, cat_amount in [
-                    ("ぽて財布", pote_wallet_amount),
                     ("ぬし財布", nushi_wallet_amount),
                     ("貯金", savings_amount),
                     ("探検隊予算", expedition_budget_amount)
                 ]:
-                    await conn.execute("""
-                        INSERT INTO user_balances (user_id, category, balance)
-                        VALUES ($1, $2, $3)
-                        ON CONFLICT (user_id, category) DO UPDATE
-                        SET balance = user_balances.balance + $3;
-                        """, user_id, category, cat_amount)
+                    if cat_amount > 0:
+                        await conn.execute("""
+                            INSERT INTO user_balances (user_id, category, balance)
+                            VALUES ($1, $2, $3)
+                            ON CONFLICT (user_id, category) DO UPDATE
+                            SET balance = user_balances.balance + $3;
+                            """, user_id, category, cat_amount)
 
                 # 取引履歴を記録
                 await conn.execute("""
@@ -717,7 +717,6 @@ class FinanceCog(commands.Cog):
 
         message = (
             f"💰 給料 {amount}円を受け取り、割り振ったぞ！\n"
-            f"👩 ぽて財布: +{pote_wallet_amount}円\n"
             f"👨 ぬし財布: +{nushi_wallet_amount}円\n"
             f"🐷 貯金: +{savings_amount}円\n"
             f"🛡 探検隊予算: +{expedition_budget_amount}円\n"
