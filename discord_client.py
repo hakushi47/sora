@@ -674,38 +674,53 @@ class FinanceCog(commands.Cog):
         )
         await interaction.response.send_message(message)
 
-    @app_commands.command(name="salary", description="給料を受け取り、指定した財布に入金するぞ！")
-    @app_commands.describe(amount="受け取った給料の金額", target_wallet="入金先の財布")
-    @app_commands.choices(target_wallet=[
-        app_commands.Choice(name="ぽて財布", value="ぽて財布"),
-        app_commands.Choice(name="ぬし財布", value="ぬし財布"),
-    ])
-    async def salary(self, interaction: discord.Interaction, amount: int, target_wallet: app_commands.Choice[str]):
+    @app_commands.command(name="salary", description="給料を受け取り、自動で割り振るぞ！")
+    @app_commands.describe(amount="受け取った給料の金額")
+    async def salary(self, interaction: discord.Interaction, amount: int):
         if amount <= 0:
             await interaction.response.send_message("おい隊員！給料は正の整数で頼む！")
             return
 
         user_id = interaction.user.id
-        wallet_name = target_wallet.value
+
+        # 金額を割り振る
+        pote_wallet_amount = amount // 4
+        nushi_wallet_amount = amount // 4
+        savings_amount = (amount * 3) // 10
+        expedition_budget_amount = (amount * 2) // 10
+        
+        # 残りを貯金に加算
+        remainder = amount - pote_wallet_amount - nushi_wallet_amount - savings_amount - expedition_budget_amount
+        savings_amount += remainder
 
         async with self.bot.db_pool.acquire() as conn:
             async with conn.transaction():
-                # 財布の残高を更新
-                await conn.execute("""
-                    INSERT INTO user_balances (user_id, category, balance)
-                    VALUES ($1, $2, $3)
-                    ON CONFLICT (user_id, category) DO UPDATE
-                    SET balance = user_balances.balance + $3;
-                    """, user_id, wallet_name, amount)
+                # 各カテゴリの残高を更新
+                for category, cat_amount in [
+                    ("ぽて財布", pote_wallet_amount),
+                    ("ぬし財布", nushi_wallet_amount),
+                    ("貯金", savings_amount),
+                    ("探検隊予算", expedition_budget_amount)
+                ]:
+                    await conn.execute("""
+                        INSERT INTO user_balances (user_id, category, balance)
+                        VALUES ($1, $2, $3)
+                        ON CONFLICT (user_id, category) DO UPDATE
+                        SET balance = user_balances.balance + $3;
+                        """, user_id, category, cat_amount)
 
                 # 取引履歴を記録
                 await conn.execute("""
                     INSERT INTO transactions (user_id, transaction_type, category, amount)
-                    VALUES ($1, 'salary', $2, $3);
-                    """, user_id, wallet_name, amount)
+                    VALUES ($1, 'salary', '給料', $2);
+                    """, user_id, amount)
 
         message = (
-            f"💰 {wallet_name}に給料 {amount}円を入金したぞ！\n"
+            f"💰 給料 {amount}円を受け取り、割り振ったぞ！\n"
+            f"👩 ぽて財布: +{pote_wallet_amount}円\n"
+            f"👨 ぬし財布: +{nushi_wallet_amount}円\n"
+            f"🐷 貯金: +{savings_amount}円\n"
+            f"🛡 探検隊予算: +{expedition_budget_amount}円\n"
             f"→ {get_captain_quote('salary')}"
         )
         await interaction.response.send_message(message)
