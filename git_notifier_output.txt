@@ -1,1 +1,6 @@
-This is a test from the post-commit hook.
+--- Debugging Python Environment ---
+Current directory: /c/Users/Ame/develop/sora
+Python executable: /c/Users/Ame/AppData/Local/Microsoft/WindowsApps/python.exe
+Python version:
+Python --- Running git_notifier.py ---
+Python --- Debugging Python Environment End ---
