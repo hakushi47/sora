@@ -6,9 +6,16 @@ import subprocess
 
 def get_latest_commit_info():
     """Gets the latest commit author and message."""
-    author = subprocess.check_output(['git', 'log', '-1', '--pretty=%an']).decode('utf-8').strip()
-    message = subprocess.check_output(['git', 'log', '-1', '--pretty=%B']).decode('utf-8').strip()
-    return author, message
+    print("Fetching latest commit info...")
+    try:
+        author = subprocess.check_output(['git', 'log', '-1', '--pretty=%an']).decode('utf-8').strip()
+        message = subprocess.check_output(['git', 'log', '-1', '--pretty=%B']).decode('utf-8').strip()
+        print(f"Author: {author}")
+        print(f"Message: {message}")
+        return author, message
+    except Exception as e:
+        print(f"Error getting commit info: {e}")
+        return "Unknown", f"Error: {e}"
 
 def send_discord_notification(webhook_url, author, message):
     """Sends a notification to the Discord webhook."""
