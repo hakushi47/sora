@@ -114,7 +114,13 @@ class SoraBot(commands.Bot):
 
         # 過去の活動記録（わず）
         if (match := re.fullmatch(r"(\d{1,2}):(\d{2})\s+(.+)わず", content)):
-            await self.handle_past_activity(message, match)
+            await self.handle_activity(message, match, 'done')
+            return
+        elif (match := re.fullmatch(r"(.+)なう", content)):
+            await self.handle_activity(message, match, 'doing')
+            return
+        elif (match := re.fullmatch(r"(\d{1,2}):(\d{2})\s+(.+)うぃる", content)):
+            await self.handle_activity(message, match, 'todo')
             return
 
         # --- 会話形式のコマンド処理 ---
@@ -511,18 +517,22 @@ class SoraBot(commands.Bot):
         logger.info("家計簿機能のテーブルを初期化しました。")
 
         async with self.db_pool.acquire() as conn:
+            # 古いテーブルが存在すれば削除
+            await conn.execute('DROP TABLE IF EXISTS past_activities;')
+            # 新しい活動記録テーブルを作成
             await conn.execute('''
-                CREATE TABLE IF NOT EXISTS past_activities (
+                CREATE TABLE IF NOT EXISTS activities (
                     id SERIAL PRIMARY KEY,
                     user_id BIGINT NOT NULL,
                     channel_id BIGINT NOT NULL,
                     guild_id BIGINT NOT NULL,
                     content TEXT NOT NULL,
                     activity_time TIMESTAMP WITH TIME ZONE NOT NULL,
+                    status TEXT NOT NULL, -- done, doing, todo
                     original_message_id BIGINT
                 );
             ''')
-        logger.info("過去活動記録テーブルを初期化しました。")
+        logger.info("活動記録テーブル(activities)を初期化しました。")
 
 
 
@@ -639,32 +649,44 @@ class SoraBot(commands.Bot):
             await message.channel.send("ごめん、中身を確認中にエラーが起きちゃった。")
 
 
-    async def handle_past_activity(self, message: discord.Message, match: re.Match):
-        """過去の活動記録を処理する"""
+    async def handle_activity(self, message: discord.Message, match: re.Match, status: str):
+        """活動記録を処理する (わず, なう, うぃる)"""
         try:
-            hour = int(match.group(1))
-            minute = int(match.group(2))
-            content = match.group(3).strip()
+            activity_time = None
+            content = ""
 
-            # メッセージの投稿日時を基準に活動日時を計算
-            activity_time = message.created_at.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if status == 'done' or status == 'todo':
+                hour = int(match.group(1))
+                minute = int(match.group(2))
+                content = match.group(3).strip()
+                
+                base_time = message.created_at
+                activity_time = base_time.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
-            # もし計算した時間が未来なら、日付を1日引く
-            if activity_time > message.created_at:
-                activity_time -= timedelta(days=1)
+                if status == 'done' and activity_time > base_time:
+                    activity_time -= timedelta(days=1)
+                elif status == 'todo' and activity_time < base_time:
+                    activity_time += timedelta(days=1)
+
+            elif status == 'doing':
+                content = match.group(1).strip()
+                activity_time = message.created_at
+
+            if activity_time is None:
+                await message.add_reaction("🤔")
+                return
 
             async with self.db_pool.acquire() as conn:
                 await conn.execute("""
-                    INSERT INTO past_activities (user_id, channel_id, guild_id, content, activity_time, original_message_id)
-                    VALUES ($1, $2, $3, $4, $5, $6)
-                """, message.author.id, message.channel.id, message.guild.id, content, activity_time, message.id)
+                    INSERT INTO activities (user_id, channel_id, guild_id, content, activity_time, status, original_message_id)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                """, message.author.id, message.channel.id, message.guild.id, content, activity_time, status, message.id)
 
             await message.add_reaction("✅")
         except ValueError:
-            # 時間の変換に失敗した場合
             await message.add_reaction("🤔")
         except Exception as e:
-            logger.error(f"過去活動の記録に失敗: {e}")
+            logger.error(f"活動の記録に失敗: {e}")
             await message.add_reaction("❌")
 
 
@@ -939,6 +961,46 @@ class FinanceCog(commands.Cog):
             f"→ {get_captain_quote('report')}"
         )
         await interaction.response.send_message(message)
+
+
+    @app_commands.command(name="scan_past_activities", description="過去のメッセージをスキャンして、記録漏れの「わず」活動を登録します。")
+    @app_commands.describe(days_back="何日前まで遡ってスキャンしますか？（デフォルト: 7）")
+    async def scan_past_activities(self, interaction: discord.Interaction, days_back: int = 7):
+        await interaction.response.defer(thinking=True) # 処理に時間がかかる可能性があるため
+
+        target_channel = interaction.channel
+        after_date = datetime.now() - timedelta(days=days_back)
+        count = 0
+
+        try:
+            # 既存の記録済みメッセージIDを取得
+            async with self.bot.db_pool.acquire() as conn:
+                # PostgreSQLのARRAY型をPythonのlistとして受け取る
+                recorded_ids_result = await conn.fetchval("SELECT array_agg(original_message_id) FROM activities WHERE original_message_id IS NOT NULL")
+                recorded_ids = set(recorded_ids_result or [])
+
+            # メッセージをスキャン
+            async for message in target_channel.history(limit=None, after=after_date):
+                if message.id in recorded_ids:
+                    continue
+
+                content = message.content.strip()
+                
+                if (match := re.fullmatch(r"(\d{1,2}):(\d{2})\s+(.+)わず", content)):
+                    await self.bot.handle_activity(message, match, 'done')
+                    count += 1
+                elif (match := re.fullmatch(r"(.+)なう", content)):
+                    await self.bot.handle_activity(message, match, 'doing')
+                    count += 1
+                elif (match := re.fullmatch(r"(\d{1,2}):(\d{2})\s+(.+)うぃる", content)):
+                    await self.bot.handle_activity(message, match, 'todo')
+                    count += 1
+            
+            await interaction.followup.send(f"スキャンが完了しました！\n新しく {count} 件の活動を記録しました。")
+
+        except Exception as e:
+            logger.error(f"過去活動のスキャンに失敗: {e}")
+            await interaction.followup.send("ごめん、スキャン中にエラーが発生しちゃった。")
 
 
 
