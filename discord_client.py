@@ -13,7 +13,7 @@ import discord
 import logging
 import asyncpg
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone, time
 from typing import List, Dict, Any, Optional
 from config import Config
 
@@ -149,7 +149,7 @@ class SoraBot(commands.Bot):
         collected_messages = []
         
         try:
-            channel = self.client.get_channel(channel_id)
+            channel = self.get_channel(channel_id)
             if not channel:
                 logger.error(f"チャンネル {channel_id} が見つかりません")
                 return collected_messages
@@ -194,38 +194,50 @@ class SoraBot(commands.Bot):
         return all_messages
 
     async def collect_messages_from_user_for_day(self, user_id: int, channel_id: int) -> List[Dict[str, Any]]:
-        """指定されたユーザーのその日のメッセージを収集"""
+        """指定されたユーザーのその日のメッセージをDBから収集"""
         collected_messages = []
         
         try:
-            channel = self.client.get_channel(channel_id)
-            if not channel:
-                logger.error(f"チャンネル {channel_id} が見つかりません")
-                return collected_messages
+            # 日本時間の今日の日付を取得
+            jst = timezone(timedelta(hours=9))
+            today_jst = datetime.now(jst).date()
+            start_of_day_jst = datetime.combine(today_jst, time.min, tzinfo=jst)
             
-            today = datetime.now().date()
+            async with self.db_pool.acquire() as conn:
+                records = await conn.fetch("""
+                    SELECT content, created_at, id
+                    FROM messages
+                    WHERE user_id = $1 AND channel_id = $2 AND created_at >= $3
+                    ORDER BY created_at ASC
+                """, user_id, channel_id, start_of_day_jst)
+
+            # チャンネルとユーザー情報を取得（APIから）
+            channel = self.get_channel(channel_id)
+            guild = channel.guild if channel else None
+            author = await self.fetch_user(user_id) if self.get_user(user_id) is None else self.get_user(user_id)
             
-            async for message in channel.history(limit=1000): # Limit to 1000 messages for performance
-                message_date = message.created_at.date()
-                if message_date == today and message.author.id == user_id:
-                    collected_messages.append({
-                        'channel_id': channel_id,
-                        'channel_name': channel.name,
-                        'user_id': message.author.id,
-                        'username': message.author.display_name or message.author.name,
-                        'content': message.content,
-                        'timestamp': message.created_at.timestamp(),
-                        'message_id': message.id,
-                        'jump_url': message.jump_url,
-                        'guild_id': message.guild.id if message.guild else None,
-                        'guild_name': message.guild.name if message.guild else None
-                    })
-                # メッセージが今日の分より古くなったら終了
-                if message_date < today:
-                    break
+            for record in records:
+                created_at_aware = record['created_at'].astimezone(jst)
+
+                # 日付が今日であることを再確認
+                if created_at_aware.date() != today_jst:
+                    continue
+
+                collected_messages.append({
+                    'channel_id': channel_id,
+                    'channel_name': channel.name if channel else 'Unknown Channel',
+                    'user_id': user_id,
+                    'username': author.display_name if author else 'Unknown User',
+                    'content': record['content'],
+                    'timestamp': created_at_aware.timestamp(),
+                    'message_id': record['id'],
+                    'jump_url': f"https://discord.com/channels/{guild.id if guild else '@me'}/{channel_id}/{record['id']}",
+                    'guild_id': guild.id if guild else None,
+                    'guild_name': guild.name if guild else None
+                })
                     
         except Exception as e:
-            logger.error(f"ユーザー {user_id} のメッセージ収集に失敗: {e}")
+            logger.error(f"ユーザー {user_id} のメッセージ収集に失敗(DB): {e}", exc_info=True)
             
         return collected_messages
 
@@ -309,13 +321,13 @@ class SoraBot(commands.Bot):
     
     async def start_bot(self):
         """Discord Botを開始（常駐）"""
-        @self.client.event
+        @self.event
         async def on_ready():
-            logger.info(f'{self.client.user} としてログインしました')
-            logger.info(f'接続中のギルド数: {len(self.client.guilds)}')
+            logger.info(f'{self.user} としてログインしました')
+            logger.info(f'接続中のギルド数: {len(self.guilds)}')
         
         try:
-            await self.client.start(self.bot_token)
+            await self.start(self.bot_token)
         except Exception as e:
             logger.error(f"Discord Botの開始に失敗: {e}")
     
@@ -324,7 +336,7 @@ class SoraBot(commands.Bot):
         if self.db_pool:
             await self.db_pool.close()
             logger.info("データベース接続プールを閉じました。")
-        await self.client.close()
+        await super().close()
 
 
 
@@ -335,10 +347,10 @@ class SoraBot(commands.Bot):
             'success': True,
         }
 
-        @self.client.event
+        @self.event
         async def on_ready():
-            logger.info(f'{self.client.user} としてログインしました')
-            logger.info(f'接続中のギルド数: {len(self.client.guilds)}')
+            logger.info(f'{self.user} としてログインしました')
+            logger.info(f'接続中のギルド数: {len(self.guilds)}')
             try:
                 messages = await self.collect_all_messages(guild_id=Config.GUILD_ID, days_back=days_back)
                 if not messages:
@@ -354,7 +366,7 @@ class SoraBot(commands.Bot):
                 await self.close()
 
         try:
-            await self.client.start(self.bot_token)
+            await self.start(self.bot_token)
         except Exception as e:
             logger.error(f"Discord Botの開始に失敗: {e}")
             return False
@@ -368,14 +380,14 @@ class SoraBot(commands.Bot):
     async def start_monitor(self):
         """常時監視モードを開始。メッセージに応答"""
 
-        @self.client.event
+        @self.event
         async def on_ready():
-            logger.info(f'{self.client.user} として監視を開始')
+            logger.info(f'{self.user} として監視を開始')
             await self.init_db() # DB初期化
 
-        @self.client.event
+        @self.event
         async def on_message(message: discord.Message):
-            if message.author.id == self.client.user.id or not message.guild:
+            if message.author.id == self.user.id or not message.guild:
                 return
 
             # 指定チャンネルのメッセージでなければ無視
@@ -394,8 +406,8 @@ class SoraBot(commands.Bot):
                         logger.warning(f"リアクションの追加に失敗しました: {reaction} ({e})")
 
             # Botへのメンションをチェック
-            if self.client.user in message.mentions:
-                mentioned_users = [user for user in message.mentions if user != self.client.user]
+            if self.user in message.mentions:
+                mentioned_users = [user for user in message.mentions if user != self.user]
                 if mentioned_users:
                     target_user = mentioned_users[0] # 最初のメンションユーザーを対象とする
                     logger.info(f"ユーザー {target_user.display_name} のサマリーリクエストを受信")
@@ -446,7 +458,7 @@ class SoraBot(commands.Bot):
 
 
         try:
-            await self.client.start(self.bot_token)
+            await self.start(self.bot_token)
         except Exception as e:
             logger.error(f"Discord 監視開始に失敗: {e}")
         finally:
