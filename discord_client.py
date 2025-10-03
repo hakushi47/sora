@@ -112,6 +112,11 @@ class SoraBot(commands.Bot):
                 await self.handle_add_item_storage_name(message, state)
             return
 
+        # 過去の活動記録（わず）
+        if (match := re.fullmatch(r"(\d{1,2}):(\d{2})\s+(.+)わず", content)):
+            await self.handle_past_activity(message, match)
+            return
+
         # --- 会話形式のコマンド処理 ---
         if re.fullmatch(r"新しい収納を追加したい", content):
             self.user_states[user_id] = {"type": "add_storage"}
@@ -505,6 +510,20 @@ class SoraBot(commands.Bot):
             ''')
         logger.info("家計簿機能のテーブルを初期化しました。")
 
+        async with self.db_pool.acquire() as conn:
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS past_activities (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    channel_id BIGINT NOT NULL,
+                    guild_id BIGINT NOT NULL,
+                    content TEXT NOT NULL,
+                    activity_time TIMESTAMP WITH TIME ZONE NOT NULL,
+                    original_message_id BIGINT
+                );
+            ''')
+        logger.info("過去活動記録テーブルを初期化しました。")
+
 
 
     async def _log_message_to_db(self, message: discord.Message):
@@ -618,6 +637,35 @@ class SoraBot(commands.Bot):
         except Exception as e:
             logger.error(f"収納アイテムのリスト取得に失敗: {e}")
             await message.channel.send("ごめん、中身を確認中にエラーが起きちゃった。")
+
+
+    async def handle_past_activity(self, message: discord.Message, match: re.Match):
+        """過去の活動記録を処理する"""
+        try:
+            hour = int(match.group(1))
+            minute = int(match.group(2))
+            content = match.group(3).strip()
+
+            # メッセージの投稿日時を基準に活動日時を計算
+            activity_time = message.created_at.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+            # もし計算した時間が未来なら、日付を1日引く
+            if activity_time > message.created_at:
+                activity_time -= timedelta(days=1)
+
+            async with self.db_pool.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO past_activities (user_id, channel_id, guild_id, content, activity_time, original_message_id)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                """, message.author.id, message.channel.id, message.guild.id, content, activity_time, message.id)
+
+            await message.add_reaction("✅")
+        except ValueError:
+            # 時間の変換に失敗した場合
+            await message.add_reaction("🤔")
+        except Exception as e:
+            logger.error(f"過去活動の記録に失敗: {e}")
+            await message.add_reaction("❌")
 
 
 import random

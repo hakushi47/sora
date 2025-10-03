@@ -1,6 +1,4 @@
---- Debugging Python Environment ---
-Current directory: /c/Users/Ame/develop/sora
-Python executable: /c/Users/Ame/AppData/Local/Microsoft/WindowsApps/python.exe
-Python version:
-Python --- Running git_notifier.py ---
-Python --- Debugging Python Environment End ---
+Fetching latest commit info...
+Author: hareame1947
+Message: 'テストコミット：通知機能の動作確認'
+Git commit notification sent to Discord.
