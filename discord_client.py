@@ -64,59 +64,91 @@ class SoraBot(commands.Bot):
         if message.author.id == self.user.id or not message.guild:
             return
 
-        # --- Weekly Balance Check ---
+        user_id = message.author.id
+        content = message.content.strip()
+
+        # --- Step-by-step Weekly Balance Check ---
         async with self.db_pool.acquire() as conn:
-            check_state_record = await conn.fetchrow("SELECT state, last_input_balance FROM balance_check_state WHERE user_id = $1", message.author.id)
+            check_state_record = await conn.fetchrow("SELECT * FROM balance_check_state WHERE user_id = $1", user_id)
 
-        if check_state_record and check_state_record['state']:
-            state = check_state_record['state']
-            content = message.content.strip()
-            user_id = message.author.id
+        if check_state_record and check_state_record['state'] and check_state_record['state'].startswith('waiting_for_balance_'):
+            wallet_name = check_state_record['state'].replace('waiting_for_balance_', '')
+            current_wallet_index = WALLET_ORDER.index(wallet_name)
 
-            if state == 'waiting_for_balance':
-                if content.isdigit():
-                    input_balance = int(content)
-                    async with self.db_pool.acquire() as conn:
-                        records = await conn.fetch("SELECT balance FROM user_balances WHERE user_id = $1 AND category IN ('ぬし財布', 'ぽて財布', '探検隊予算')", user_id)
-                        current_balance = sum(r['balance'] for r in records)
-                        diff = input_balance - current_balance
-
-                        if diff == 0:
-                            await message.channel.send("✅ 残高は一致している！今週もご苦労だったな。")
-                            await conn.execute("UPDATE balance_check_state SET state = NULL, last_input_balance = NULL, last_checked_at = CURRENT_TIMESTAMP WHERE user_id = $1", user_id)
-                        else:
-                            await conn.execute("UPDATE balance_check_state SET state = 'waiting_for_reconciliation', last_input_balance = $1 WHERE user_id = $2", input_balance, user_id)
-                            await message.channel.send(f"⚠️ **{abs(diff)}** 円の差異がある。記入漏れがないか確認し、以下のいずれかのコマンドを実行せよ：`!更新` または `!再入力 [修正後の残高]`")
-                else:
-                    await message.channel.send("おい隊員！有効な残高を半角数字で入力せよ！")
+            if not content.isdigit():
+                await message.channel.send(f"おい隊員！有効な残高を半角数字で入力せよ！")
                 return
 
-            elif state == 'waiting_for_reconciliation':
-                if content == '!更新':
-                    last_input_balance = check_state_record['last_input_balance']
-                    async with self.db_pool.acquire() as conn:
-                        async with conn.transaction():
-                            records = await conn.fetch("SELECT balance FROM user_balances WHERE user_id = $1 AND category IN ('ぬし財布', 'ぽて財布', '探検隊予算')", user_id)
-                            current_balance = sum(r['balance'] for r in records)
-                            diff = last_input_balance - current_balance
+            input_balance = int(content)
+            column_map = {"ぬし財布": "input_nushi", "ぽて財布": "input_pote", "探検隊予算": "input_budget", "貯金": "input_savings"}
+            db_column_name = column_map[wallet_name]
 
-                            await conn.execute("INSERT INTO user_balances (user_id, category, balance) VALUES ($1, '探検隊予算', $2) ON CONFLICT (user_id, category) DO UPDATE SET balance = user_balances.balance + $2;", user_id, diff)
-                            await conn.execute("INSERT INTO transactions (user_id, transaction_type, category, amount) VALUES ($1, 'adjustment', '残高調整', $2);", user_id, diff)
-                            await conn.execute("UPDATE balance_check_state SET state = NULL, last_input_balance = NULL, last_checked_at = CURRENT_TIMESTAMP WHERE user_id = $1", user_id)
-                    await message.channel.send(f"残高を **{last_input_balance}** 円に更新した。これが次回の基準となる。")
+            async with self.db_pool.acquire() as conn:
+                await conn.execute(f"UPDATE balance_check_state SET {db_column_name} = $1 WHERE user_id = $2", input_balance, user_id)
 
-                elif content.startswith('!再入力 '):
-                    new_balance_str = content.split(' ', 1)[1]
-                    if new_balance_str.isdigit():
-                        message.content = new_balance_str
-                        async with self.db_pool.acquire() as conn:
-                            await conn.execute("UPDATE balance_check_state SET state = 'waiting_for_balance' WHERE user_id = $1", user_id)
-                        await self.on_message(message)
+                if current_wallet_index < len(WALLET_ORDER) - 1:
+                    next_wallet_name = WALLET_ORDER[current_wallet_index + 1]
+                    next_state = f"waiting_for_balance_{next_wallet_name}"
+                    await conn.execute("UPDATE balance_check_state SET state = $1 WHERE user_id = $2", next_state, user_id)
+                    await message.channel.send(f"了解した。次に【{next_wallet_name}】の残高を入力せよ！")
+                else:
+                    # Final step, calculate differences
+                    await conn.execute("UPDATE balance_check_state SET state = 'waiting_for_reconciliation' WHERE user_id = $1", user_id)
+                    final_inputs = await conn.fetchrow("SELECT * FROM balance_check_state WHERE user_id = $1", user_id)
+                    db_balances_records = await conn.fetch("SELECT category, balance FROM user_balances WHERE user_id = $1", user_id)
+                    db_balances = {r['category']: r['balance'] for r in db_balances_records}
+
+                    input_balances = {
+                        "ぬし財布": final_inputs['input_nushi'] or 0,
+                        "ぽて財布": final_inputs['input_pote'] or 0,
+                        "探検隊予算": final_inputs['input_budget'] or 0,
+                        "貯金": final_inputs['input_savings'] or 0,
+                    }
+
+                    diff_messages = []
+                    total_diff = 0
+                    for wallet in WALLET_ORDER:
+                        db_val = db_balances.get(wallet, 0)
+                        input_val = input_balances.get(wallet, 0)
+                        diff = input_val - db_val
+                        total_diff += diff
+                        if diff != 0:
+                            diff_messages.append(f"【{wallet}】: {diff:+}円")
+
+                    if total_diff == 0:
+                        await message.channel.send("✅ 全ての残高が一致した！完璧だ！今週のチェックを完了とする。")
+                        await conn.execute("UPDATE balance_check_state SET state = NULL, last_checked_at = CURRENT_TIMESTAMP WHERE user_id = $1", user_id)
                     else:
-                        await message.channel.send("おい隊員！再入力する残高は半角数字で頼む！")
-                else:
-                    await message.channel.send("`!更新` または `!再入力 [数字]` の形式でコマンドを実行してくれ。")
-                return
+                        response = f"⚠️ 合計で **{total_diff:+}円** の差異があるぞ。\n**内訳:**\n" + "\n".join(diff_messages)
+                        response += "\n\n問題なければ `!更新` を、最初からやり直す場合は `!再入力` を実行せよ。"
+                        await message.channel.send(response)
+            return
+
+        elif check_state_record and check_state_record['state'] == 'waiting_for_reconciliation':
+            if content == '!更新':
+                async with self.db_pool.acquire() as conn:
+                    inputs = await conn.fetchrow("SELECT * FROM balance_check_state WHERE user_id = $1", user_id)
+                    input_balances = {
+                        "ぬし財布": inputs['input_nushi'],
+                        "ぽて財布": inputs['input_pote'],
+                        "探検隊予算": inputs['input_budget'],
+                        "貯金": inputs['input_savings'],
+                    }
+                    async with conn.transaction():
+                        for wallet, new_balance in input_balances.items():
+                            if new_balance is not None:
+                                await conn.execute("INSERT INTO user_balances (user_id, category, balance) VALUES ($1, $2, $3) ON CONFLICT (user_id, category) DO UPDATE SET balance = $3", user_id, wallet, new_balance)
+                        await conn.execute("UPDATE balance_check_state SET state = NULL, last_checked_at = CURRENT_TIMESTAMP WHERE user_id = $1", user_id)
+                await message.channel.send("✅ 全ての財布の残高を更新した。これで記録は現実と一致したはずだ。")
+            elif content == '!再入力':
+                async with self.db_pool.acquire() as conn:
+                    await conn.execute("UPDATE balance_check_state SET state = 'waiting_for_balance_ぬし財布' WHERE user_id = $1", user_id)
+                await message.channel.send("了解した。最初からやり直す。まず【ぬし財布】の残高を入力せよ！")
+            else:
+                await message.channel.send("`!更新` または `!再入力` の形式でコマンドを実行してくれ。")
+            return
+
+        # --- End of Balance Check ---
 
         if message.channel.id not in self.target_channel_ids:
             return
@@ -142,9 +174,6 @@ class SoraBot(commands.Bot):
                 else:
                     await message.channel.send(f"{target_user.display_name}さんの本日のメッセージは見つかりませんでした。")
                 return
-
-        user_id = message.author.id
-        content = message.content.strip()
 
         if user_id in self.user_states:
             state = self.user_states[user_id]
@@ -348,20 +377,24 @@ class SoraBot(commands.Bot):
             await conn.execute('''CREATE TABLE IF NOT EXISTS guilds (id BIGINT PRIMARY KEY, name TEXT NOT NULL);''')
             await conn.execute('''CREATE TABLE IF NOT EXISTS storages (id SERIAL PRIMARY KEY, guild_id BIGINT REFERENCES guilds(id) ON DELETE CASCADE, name TEXT NOT NULL, UNIQUE(guild_id, name));''')
             await conn.execute('''CREATE TABLE IF NOT EXISTS items (id SERIAL PRIMARY KEY, storage_id INT REFERENCES storages(id) ON DELETE CASCADE, name TEXT NOT NULL, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(storage_id, name));''')
-        logger.info("データベースのテーブルを初期化しました。")
-
-        async with self.db_pool.acquire() as conn:
             await conn.execute('''CREATE TABLE IF NOT EXISTS messages (id BIGINT PRIMARY KEY, guild_id BIGINT, channel_id BIGINT, user_id BIGINT, content TEXT, created_at TIMESTAMP WITH TIME ZONE);''')
-        logger.info("messagesテーブルを初期化しました。")
-
-        async with self.db_pool.acquire() as conn:
             await conn.execute('''CREATE TABLE IF NOT EXISTS user_balances (user_id BIGINT NOT NULL, category TEXT NOT NULL, balance BIGINT NOT NULL, PRIMARY KEY (user_id, category));''')
             await conn.execute('''CREATE TABLE IF NOT EXISTS transactions (id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL, transaction_type TEXT NOT NULL, category TEXT, amount BIGINT NOT NULL, created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP);''')
-            await conn.execute('''CREATE TABLE IF NOT EXISTS balance_check_state (user_id BIGINT PRIMARY KEY, state TEXT, last_input_balance BIGINT, last_checked_at TIMESTAMP WITH TIME ZONE);''')
-        logger.info("家計簿機能のテーブルを初期化しました。")
+            
+            # balance_check_stateテーブルを再作成
+            await conn.execute('''DROP TABLE IF EXISTS balance_check_state;''')
+            await conn.execute('''CREATE TABLE IF NOT EXISTS balance_check_state (
+                                user_id BIGINT PRIMARY KEY,
+                                state TEXT,
+                                input_nushi BIGINT,
+                                input_pote BIGINT,
+                                input_budget BIGINT,
+                                input_savings BIGINT,
+                                last_checked_at TIMESTAMP WITH TIME ZONE
+                            );''')
+            logger.info("家計簿・残高チェック機能のテーブルを初期化しました。")
 
-        async with self.db_pool.acquire() as conn:
-            await conn.execute('DROP TABLE IF EXISTS past_activities;')
+            await conn.execute('''DROP TABLE IF EXISTS past_activities;''')
             await conn.execute('''CREATE TABLE IF NOT EXISTS activities (id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL, channel_id BIGINT NOT NULL, guild_id BIGINT NOT NULL, content TEXT NOT NULL, activity_time TIMESTAMP WITH TIME ZONE NOT NULL, status TEXT NOT NULL, original_message_id BIGINT);''')
         logger.info("活動記録テーブル(activities)を初期化しました。")
 
@@ -483,18 +516,20 @@ def get_captain_quote(category: str) -> str:
 class FinanceCog(commands.Cog):
     def __init__(self, bot: SoraBot):
         self.bot = bot
+        self.jst = timezone(timedelta(hours=9))
+        self.weekly_balance_check.start()
+
+    def cog_unload(self):
+        self.weekly_balance_check.cancel()
 
     @tasks.loop(time=time(20, 0, tzinfo=timezone(timedelta(hours=9))))
     async def weekly_balance_check(self):
         today = datetime.now(self.jst)
-        if today.weekday() != 4: # 4:金曜日
-            return
+        if today.weekday() != 4: return # 4:金曜日
         
         channel_id = self.bot.target_channel_ids[0]
         channel = self.bot.get_channel(channel_id)
-        if not channel:
-            logger.error(f"残高チェック用のチャンネル {channel_id} が見つからん！")
-            return
+        if not channel: return logger.error(f"残高チェック用のチャンネル {channel_id} が見つからん！")
 
         start_of_week = (today - timedelta(days=today.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
 
@@ -510,184 +545,36 @@ class FinanceCog(commands.Cog):
                     continue
 
                 if not prompt_sent:
-                    await channel.send("🚨 毎週の残高チェックの時間だ！財布（ぬし財布、ぽて財布、探検隊予算）の現在の合計残高を半角数字で入力せよ！")
+                    await channel.send("🚨 毎週の残高チェックの時間だ！これより各財布の残高を順番に確認する。")
                     prompt_sent = True
+                
+                await conn.execute("INSERT INTO balance_check_state (user_id, state) VALUES ($1, 'waiting_for_balance_ぬし財布') ON CONFLICT (user_id) DO UPDATE SET state = 'waiting_for_balance_ぬし財布', input_nushi=NULL, input_pote=NULL, input_budget=NULL, input_savings=NULL;", user_id)
+                try:
+                    user = await self.bot.fetch_user(user_id)
+                    await user.send("まず【ぬし財布】の現在の残高を半角数字で入力せよ！")
+                except (discord.NotFound, discord.Forbidden):
+                    await channel.send(f"<@{user_id}>、DMが送信できん！まず【ぬし財布】の現在の残高を半角数字で入力せよ！")
 
-                await conn.execute('''
-                    INSERT INTO balance_check_state (user_id, state) VALUES ($1, 'waiting_for_balance')
-                    ON CONFLICT (user_id) DO UPDATE SET state = 'waiting_for_balance', last_input_balance = NULL;
-                ''', user_id)
-        if prompt_sent:
-            logger.info("残高チェックが必要な隊員への通知を完了した。")
+        if prompt_sent: logger.info("残高チェックが必要な隊員への通知を完了した。")
 
     @app_commands.command(name="check_balance_manual", description="週次の残高チェックを手動で開始するぞ！")
     async def check_balance_manual(self, interaction: discord.Interaction):
         user_id = interaction.user.id
         async with self.bot.db_pool.acquire() as conn:
-            await conn.execute('''
-                INSERT INTO balance_check_state (user_id, state) VALUES ($1, 'waiting_for_balance')
-                ON CONFLICT (user_id) DO UPDATE SET state = 'waiting_for_balance', last_input_balance = NULL;
-            ''', user_id)
-        await interaction.response.send_message("🚨 残高チェックを開始する！財布（ぬし財布、ぽて財布、探検隊予算）の現在の合計残高を半角数字で入力せよ！", ephemeral=True)
+            await conn.execute("INSERT INTO balance_check_state (user_id, state) VALUES ($1, 'waiting_for_balance_ぬし財布') ON CONFLICT (user_id) DO UPDATE SET state = 'waiting_for_balance_ぬし財布', input_nushi=NULL, input_pote=NULL, input_budget=NULL, input_savings=NULL;", user_id)
+        await interaction.response.send_message("🚨 残高チェックを開始する！まず【ぬし財布】の現在の残高を半角数字で入力せよ！", ephemeral=True)
 
-    @app_commands.command(name="balance", description="現在の全財産を確認するぞ！")
-    async def balance(self, interaction: discord.Interaction):
-        user_id = interaction.user.id
-        async with self.bot.db_pool.acquire() as conn:
-            records = await conn.fetch("SELECT category, balance FROM user_balances WHERE user_id = $1", user_id)
-        
-        balance_data = {record['category']: record['balance'] for record in records}
-        pote_wallet = balance_data.get("ぽて財布", 0)
-        nushi_wallet = balance_data.get("ぬし財布", 0)
-        savings = balance_data.get("貯金", 0)
-        expedition_budget = balance_data.get("探検隊予算", 0)
-        living_expenses = pote_wallet + nushi_wallet
-
-        message = (
-            f"👩 ぽて財布: {pote_wallet}円\n"
-            f"👨 ぬし財布: {nushi_wallet}円\n"
-            f"🏠 生活費残り: {living_expenses}円\n"
-            f"🐷 貯金: {savings}円\n"
-            f"🛡 探検隊予算: {expedition_budget}円\n"
-            f"→ {get_captain_quote('balance')}"
-        )
-        await interaction.response.send_message(message)
-
-    @app_commands.command(name="salary", description="給料を受け取り、自動で割り振るぞ！")
-    @app_commands.describe(amount="受け取った給料の金額")
-    async def salary(self, interaction: discord.Interaction, amount: int):
-        if amount <= 0:
-            await interaction.response.send_message("おい隊員！給料は正の整数で頼む！")
+    @commands.command(name="リセット")
+    async def reset_balance(self, ctx: commands.Context, amount: int):
+        user_id = ctx.author.id
+        if amount < 0:
+            await ctx.send("おい隊員！リセットする金額は正の数値を指定しろ！")
             return
-
-        user_id = interaction.user.id
-        nushi_wallet_amount = amount // 2
-        savings_amount = (amount * 3) // 10
-        expedition_budget_amount = (amount * 2) // 10
-        pote_wallet_amount = 0
         
-        remainder = amount - nushi_wallet_amount - savings_amount - expedition_budget_amount
-        savings_amount += remainder
-
         async with self.bot.db_pool.acquire() as conn:
             async with conn.transaction():
-                for category, cat_amount in [("ぬし財布", nushi_wallet_amount), ("貯金", savings_amount), ("探検隊予算", expedition_budget_amount)]:
-                    if cat_amount > 0:
-                        await conn.execute("INSERT INTO user_balances (user_id, category, balance) VALUES ($1, $2, $3) ON CONFLICT (user_id, category) DO UPDATE SET balance = user_balances.balance + $3;", user_id, category, cat_amount)
-                await conn.execute("INSERT INTO transactions (user_id, transaction_type, category, amount) VALUES ($1, 'salary', '給料', $2);", user_id, amount)
-
-        message = (
-            f"💰 給料 {amount}円を受け取り、割り振ったぞ！\n"
-            f"👩 ぽて財布: +{pote_wallet_amount}円\n"
-            f"👨 ぬし財布: +{nushi_wallet_amount}円\n"
-            f"🐷 貯金: +{savings_amount}円\n"
-            f"🛡 探検隊予算: +{expedition_budget_amount}円\n"
-            f"→ {get_captain_quote('salary')}"
-        )
-        await interaction.response.send_message(message)
-
-    @app_commands.command(name="transfer", description="財布・貯金・予算の間で資金を移動するぞ！")
-    @app_commands.describe(amount="移動する金額", from_wallet="移動元の財布/カテゴリ", to_wallet="移動先の財布/カテゴリ")
-    @app_commands.choices(from_wallet=[app_commands.Choice(name="ぽて財布", value="ぽて財布"), app_commands.Choice(name="ぬし財布", value="ぬし財布"), app_commands.Choice(name="貯金", value="貯金"), app_commands.Choice(name="探検隊予算", value="探検隊予算")], 
-                          to_wallet=[app_commands.Choice(name="ぽて財布", value="ぽて財布"), app_commands.Choice(name="ぬし財布", value="ぬし財布"), app_commands.Choice(name="貯金", value="貯金"), app_commands.Choice(name="探検隊予算", value="探検隊予算")])
-    async def transfer(self, interaction: discord.Interaction, amount: int, from_wallet: app_commands.Choice[str], to_wallet: app_commands.Choice[str]):
-        if amount <= 0:
-            await interaction.response.send_message("おい隊員！移動する金額は正の整数で頼む！")
-            return
-        user_id, from_name, to_name = interaction.user.id, from_wallet.value, to_wallet.value
-        if from_name == to_name:
-            await interaction.response.send_message("移動元と移動先が同じだぞ！確認しろ！")
-            return
-
-        async with self.bot.db_pool.acquire() as conn:
-            async with conn.transaction():
-                current_balance_record = await conn.fetchrow("SELECT balance FROM user_balances WHERE user_id = $1 AND category = $2", user_id, from_name)
-                current_balance = current_balance_record['balance'] if current_balance_record else 0
-                if current_balance < amount:
-                    await interaction.response.send_message(f"おい隊員！ {from_name}の残高が足りないぞ！ (現在: {current_balance}円)")
-                    return
-                await conn.execute("UPDATE user_balances SET balance = balance - $1 WHERE user_id = $2 AND category = $3", amount, user_id, from_name)
-                await conn.execute("INSERT INTO user_balances (user_id, category, balance) VALUES ($1, $2, $3) ON CONFLICT (user_id, category) DO UPDATE SET balance = user_balances.balance + $3", user_id, to_name, amount)
-                await conn.execute("INSERT INTO transactions (user_id, transaction_type, category, amount) VALUES ($1, 'transfer', $2, $3);", user_id, f"{from_name}→{to_name}", amount)
+                await conn.execute("DELETE FROM user_balances WHERE user_id = $1 AND category IN ('ぬし財布', 'ぽて財布', '探検隊予算', '貯金')", user_id)
+                await conn.execute("INSERT INTO user_balances (user_id, category, balance) VALUES ($1, 'ぽて財布', $2)", user_id, amount)
+                await conn.execute("UPDATE balance_check_state SET state = NULL, input_nushi=NULL, input_pote=NULL, input_budget=NULL, input_savings=NULL, last_checked_at = NULL WHERE user_id = $1", user_id)
         
-        await interaction.response.send_message(f"🔄 {from_name} から {to_name} へ {amount}円を移動したぞ！\n→ 資金の再配分、見事だ！")
-
-    @app_commands.command(name="spend", description="支出を記録するぞ！")
-    @app_commands.describe(amount="支出した金額", category="支出の内容", from_wallet="どの財布から支払ったか")
-    @app_commands.choices(category=[app_commands.Choice(name="食費", value="食費"), app_commands.Choice(name="日用品費", value="日用品費"), app_commands.Choice(name="交通費", value="交通費"), app_commands.Choice(name="家賃", value="家賃"), app_commands.Choice(name="交際費", value="交際費"), app_commands.Choice(name="娯楽費", value="娯楽費"), app_commands.Choice(name="医療費", value="医療費"), app_commands.Choice(name="その他", value="その他")], 
-                          from_wallet=[app_commands.Choice(name="ぽて財布", value="ぽて財布"), app_commands.Choice(name="ぬし財布", value="ぬし財布"), app_commands.Choice(name="探検隊予算", value="探検隊予算")])
-    async def spend(self, interaction: discord.Interaction, amount: int, category: app_commands.Choice[str], from_wallet: app_commands.Choice[str]):
-        if amount <= 0:
-            await interaction.response.send_message("おい隊員！支出は正の整数で頼む！")
-            return
-        user_id, category_name, source_wallet_name = interaction.user.id, category.value, from_wallet.value
-        async with self.bot.db_pool.acquire() as conn:
-            async with conn.transaction():
-                current_balance_record = await conn.fetchrow("SELECT balance FROM user_balances WHERE user_id = $1 AND category = $2", user_id, source_wallet_name)
-                current_balance = current_balance_record['balance'] if current_balance_record else 0
-                if current_balance < amount:
-                    await interaction.response.send_message(f"おい隊員！ {source_wallet_name}の残高が足りないぞ！ (現在: {current_balance}円)")
-                    return
-                await conn.execute("UPDATE user_balances SET balance = balance - $1 WHERE user_id = $2 AND category = $3", amount, user_id, source_wallet_name)
-                await conn.execute("INSERT INTO transactions (user_id, transaction_type, category, amount) VALUES ($1, 'spend', $2, $3);", user_id, category_name, amount)
-        
-        icon = {"ぽて財布": "👩", "ぬし財布": "👨", "探検隊予算": "🛡"}.get(source_wallet_name, "💰")
-        await interaction.response.send_message(f"{icon} {source_wallet_name}から【{category_name}】として {amount}円を消費\n→ {get_captain_quote('spend')}")
-
-    @app_commands.command(name="report", description="指定した期間の収支報告書を作成するぞ！")
-    @app_commands.describe(period="報告の期間 (week/month)")
-    @app_commands.choices(period=[app_commands.Choice(name="今週", value="week"), app_commands.Choice(name="今月", value="month")])
-    async def report(self, interaction: discord.Interaction, period: app_commands.Choice[str]):
-        user_id, period_name = interaction.user.id, period.value
-        now = datetime.now()
-        if period_name == 'week':
-            start_date = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
-            title = "今週の探検隊活動まとめ"
-        else:
-            start_date = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-            title = "今月の探検隊活動まとめ"
-        
-        async with self.bot.db_pool.acquire() as conn:
-            transactions = await conn.fetch("SELECT transaction_type, category, amount FROM transactions WHERE user_id = $1 AND created_at >= $2", user_id, start_date)
-        
-        total_salary = sum(t['amount'] for t in transactions if t['transaction_type'] == 'salary')
-        spend_by_category = {cat: sum(t['amount'] for t in transactions if t['transaction_type'] == 'spend' and t['category'] == cat) for cat in ["食費", "日用品費", "交通費", "家賃", "交際費", "娯楽費", "医療費", "その他"]}
-        total_spend = sum(spend_by_category.values())
-
-        message = (
-            f"📅 {title}\n"
-            f"💰 総収入: {total_salary}円\n"
-            f"💸 総支出: {total_spend}円\n"
-            f"--- 支出内訳 ---\n"
-            + "".join([f" - {cat}: {amount}円\n" for cat, amount in spend_by_category.items() if amount > 0]) +
-            f"→ {get_captain_quote('report')}"
-        )
-        await interaction.response.send_message(message)
-
-    @app_commands.command(name="scan_past_activities", description="過去のメッセージをスキャンして、記録漏れの「わず」活動を登録します。")
-    @app_commands.describe(days_back="何日前まで遡ってスキャンしますか？（デフォルト: 7）")
-    async def scan_past_activities(self, interaction: discord.Interaction, days_back: int = 7):
-        await interaction.response.defer(thinking=True)
-        target_channel, after_date, count = interaction.channel, datetime.now() - timedelta(days=days_back), 0
-        try:
-            async with self.bot.db_pool.acquire() as conn:
-                recorded_ids_result = await conn.fetchval("SELECT array_agg(original_message_id) FROM activities WHERE original_message_id IS NOT NULL")
-                recorded_ids = set(recorded_ids_result or [])
-            
-            async for message in target_channel.history(limit=None, after=after_date):
-                if message.id in recorded_ids: continue
-                content = message.content.strip()
-                if (match := re.fullmatch(r"(\d{1,2}):(\d{2})\s+(.+)わず", content)):
-                    await self.bot.handle_activity(message, match, 'done')
-                    count += 1
-                elif (match := re.fullmatch(r"(.+)なう", content)):
-                    await self.bot.handle_activity(message, match, 'doing')
-                    count += 1
-                elif (match := re.fullmatch(r"(\d{1,2}):(\d{2})\s+(.+)うぃる", content)):
-                    await self.bot.handle_activity(message, match, 'todo')
-                    count += 1
-            
-            await interaction.followup.send(f"スキャン完了！ 新しく {count} 件の活動を記録した。")
-        except Exception as e:
-            logger.error(f"過去活動のスキャンに失敗: {e}")
-            await interaction.followup.send("すまん、スキャン中にエラーが発生した。")
+        await ctx.send(f"よし！残高をリセットし、**ぽて財布**を **{amount}** 円に設定した。")
