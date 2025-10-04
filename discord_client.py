@@ -46,6 +46,7 @@ class SoraBot(commands.Bot):
 
     async def on_ready(self):
         try:
+            logger.info(">>>>>> 新バージョンのコードが正常に起動しました！<<<<<<")
             logger.info(f'{self.user} として監視を開始')
             await self.init_db() # DB初期化
             logger.info("データベースの初期化が完了しました。")
