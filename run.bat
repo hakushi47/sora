@@ -10,7 +10,7 @@ if not exist .env (
     exit /b 1
 )
 
-REM Pythonの実行
-python main.py --schedule
+REM PowerShellを使ってUTF-8でログを記録しつつ、コンソールにも表示
+powershell -Command "python -u main.py --schedule 2>&1 | Tee-Object -FilePath 'run_out.txt' -Encoding 'utf8'"
 
 pause

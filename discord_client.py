@@ -77,15 +77,13 @@ class SoraBot(commands.Bot):
                 if content.isdigit():
                     input_balance = int(content)
                     async with self.db_pool.acquire() as conn:
-                        # DB上の残高を計算 (ぬし財布, ぽて財布, 探検隊予算)
                         records = await conn.fetch("SELECT balance FROM user_balances WHERE user_id = $1 AND category IN ('ぬし財布', 'ぽて財布', '探検隊予算')", user_id)
                         current_balance = sum(r['balance'] for r in records)
-                        
                         diff = input_balance - current_balance
 
                         if diff == 0:
                             await message.channel.send("✅ 残高は一致している！今週もご苦労だったな。")
-                            await conn.execute("UPDATE balance_check_state SET state = NULL, last_input_balance = NULL WHERE user_id = $1", user_id)
+                            await conn.execute("UPDATE balance_check_state SET state = NULL, last_input_balance = NULL, last_checked_at = CURRENT_TIMESTAMP WHERE user_id = $1", user_id)
                         else:
                             await conn.execute("UPDATE balance_check_state SET state = 'waiting_for_reconciliation', last_input_balance = $1 WHERE user_id = $2", input_balance, user_id)
                             await message.channel.send(f"⚠️ **{abs(diff)}** 円の差異がある。記入漏れがないか確認し、以下のいずれかのコマンドを実行せよ：`!更新` または `!再入力 [修正後の残高]`")
@@ -102,35 +100,23 @@ class SoraBot(commands.Bot):
                             current_balance = sum(r['balance'] for r in records)
                             diff = last_input_balance - current_balance
 
-                            # 差額を「探検隊予算」に調整として加算
-                            await conn.execute("""
-                                INSERT INTO user_balances (user_id, category, balance) VALUES ($1, '探検隊予算', $2)
-                                ON CONFLICT (user_id, category) DO UPDATE SET balance = user_balances.balance + $2;
-                            """, user_id, diff)
-                            
-                            # 調整履歴を記録
-                            await conn.execute("""
-                                INSERT INTO transactions (user_id, transaction_type, category, amount)
-                                VALUES ($1, 'adjustment', '残高調整', $2);
-                            """, user_id, diff)
-
-                            await conn.execute("UPDATE balance_check_state SET state = NULL, last_input_balance = NULL WHERE user_id = $1", user_id)
+                            await conn.execute("INSERT INTO user_balances (user_id, category, balance) VALUES ($1, '探検隊予算', $2) ON CONFLICT (user_id, category) DO UPDATE SET balance = user_balances.balance + $2;", user_id, diff)
+                            await conn.execute("INSERT INTO transactions (user_id, transaction_type, category, amount) VALUES ($1, 'adjustment', '残高調整', $2);", user_id, diff)
+                            await conn.execute("UPDATE balance_check_state SET state = NULL, last_input_balance = NULL, last_checked_at = CURRENT_TIMESTAMP WHERE user_id = $1", user_id)
                     await message.channel.send(f"残高を **{last_input_balance}** 円に更新した。これが次回の基準となる。")
 
                 elif content.startswith('!再入力 '):
                     new_balance_str = content.split(' ', 1)[1]
                     if new_balance_str.isdigit():
-                        # メッセージを偽装して再処理
                         message.content = new_balance_str
-                        await conn.execute("UPDATE balance_check_state SET state = 'waiting_for_balance' WHERE user_id = $1", user_id)
+                        async with self.db_pool.acquire() as conn:
+                            await conn.execute("UPDATE balance_check_state SET state = 'waiting_for_balance' WHERE user_id = $1", user_id)
                         await self.on_message(message)
                     else:
                         await message.channel.send("おい隊員！再入力する残高は半角数字で頼む！")
                 else:
                     await message.channel.send("`!更新` または `!再入力 [数字]` の形式でコマンドを実行してくれ。")
                 return
-
-        # --- End of Weekly Balance Check ---
 
         if message.channel.id not in self.target_channel_ids:
             return
@@ -371,7 +357,7 @@ class SoraBot(commands.Bot):
         async with self.db_pool.acquire() as conn:
             await conn.execute('''CREATE TABLE IF NOT EXISTS user_balances (user_id BIGINT NOT NULL, category TEXT NOT NULL, balance BIGINT NOT NULL, PRIMARY KEY (user_id, category));''')
             await conn.execute('''CREATE TABLE IF NOT EXISTS transactions (id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL, transaction_type TEXT NOT NULL, category TEXT, amount BIGINT NOT NULL, created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP);''')
-            await conn.execute('''CREATE TABLE IF NOT EXISTS balance_check_state (user_id BIGINT PRIMARY KEY, state TEXT, last_input_balance BIGINT);''')
+            await conn.execute('''CREATE TABLE IF NOT EXISTS balance_check_state (user_id BIGINT PRIMARY KEY, state TEXT, last_input_balance BIGINT, last_checked_at TIMESTAMP WITH TIME ZONE);''')
         logger.info("家計簿機能のテーブルを初期化しました。")
 
         async with self.db_pool.acquire() as conn:
@@ -497,6 +483,52 @@ def get_captain_quote(category: str) -> str:
 class FinanceCog(commands.Cog):
     def __init__(self, bot: SoraBot):
         self.bot = bot
+
+    @tasks.loop(time=time(20, 0, tzinfo=timezone(timedelta(hours=9))))
+    async def weekly_balance_check(self):
+        today = datetime.now(self.jst)
+        if today.weekday() != 4: # 4:金曜日
+            return
+        
+        channel_id = self.bot.target_channel_ids[0]
+        channel = self.bot.get_channel(channel_id)
+        if not channel:
+            logger.error(f"残高チェック用のチャンネル {channel_id} が見つからん！")
+            return
+
+        start_of_week = (today - timedelta(days=today.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+
+        async with self.bot.db_pool.acquire() as conn:
+            user_records = await conn.fetch("SELECT DISTINCT user_id FROM user_balances")
+            prompt_sent = False
+            for record in user_records:
+                user_id = record['user_id']
+                check_state = await conn.fetchrow("SELECT last_checked_at FROM balance_check_state WHERE user_id = $1", user_id)
+                
+                if check_state and check_state['last_checked_at'] and check_state['last_checked_at'] >= start_of_week:
+                    logger.info(f"ユーザー {user_id} は今週既にチェック済みのためスキップする。")
+                    continue
+
+                if not prompt_sent:
+                    await channel.send("🚨 毎週の残高チェックの時間だ！財布（ぬし財布、ぽて財布、探検隊予算）の現在の合計残高を半角数字で入力せよ！")
+                    prompt_sent = True
+
+                await conn.execute('''
+                    INSERT INTO balance_check_state (user_id, state) VALUES ($1, 'waiting_for_balance')
+                    ON CONFLICT (user_id) DO UPDATE SET state = 'waiting_for_balance', last_input_balance = NULL;
+                ''', user_id)
+        if prompt_sent:
+            logger.info("残高チェックが必要な隊員への通知を完了した。")
+
+    @app_commands.command(name="check_balance_manual", description="週次の残高チェックを手動で開始するぞ！")
+    async def check_balance_manual(self, interaction: discord.Interaction):
+        user_id = interaction.user.id
+        async with self.bot.db_pool.acquire() as conn:
+            await conn.execute('''
+                INSERT INTO balance_check_state (user_id, state) VALUES ($1, 'waiting_for_balance')
+                ON CONFLICT (user_id) DO UPDATE SET state = 'waiting_for_balance', last_input_balance = NULL;
+            ''', user_id)
+        await interaction.response.send_message("🚨 残高チェックを開始する！財布（ぬし財布、ぽて財布、探検隊予算）の現在の合計残高を半角数字で入力せよ！", ephemeral=True)
 
     @app_commands.command(name="balance", description="現在の全財産を確認するぞ！")
     async def balance(self, interaction: discord.Interaction):
