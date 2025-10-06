@@ -784,3 +784,92 @@ class FinanceCog(commands.Cog):
             f"🫡 {get_captain_quote('balance')}"
         )
         await interaction.response.send_message(message)
+
+    @app_commands.command(name="balance", description="すべての財布の現在の残高を一覧で表示するぞ。")
+    async def balance(self, interaction: discord.Interaction):
+        user_id = interaction.user.id
+        
+        async with self.bot.db_pool.acquire() as conn:
+            records = await conn.fetch("SELECT category, balance FROM user_balances WHERE user_id = $1 ORDER BY category", user_id)
+
+        if not records:
+            await interaction.response.send_message("まだ財布の残高記録がないようだ。まずは `/salary` などで収入を記録しよう！", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title=f"{interaction.user.display_name} の財産状況",
+            color=discord.Color.blue(),
+            timestamp=datetime.now(self.jst)
+        )
+
+        total_balance = 0
+        wallet_order = ["ぬし財布", "ぽて財布", "探検隊予算", "貯金"] # 表示順を定義
+        
+        # 順序通りに表示するために一度辞書化
+        balances = {record['category']: record['balance'] for record in records}
+        
+        # 定義した順序で財布情報を追加
+        for wallet_name in wallet_order:
+            if wallet_name in balances:
+                balance = balances[wallet_name]
+                embed.add_field(name=wallet_name, value=f"{balance:,} 円", inline=False)
+                total_balance += balance
+            
+        # 順序リストに含まれない財布があった場合も表示（念のため）
+        other_wallets = {k: v for k, v in balances.items() if k not in wallet_order}
+        for wallet_name, balance in other_wallets.items():
+            embed.add_field(name=wallet_name, value=f"{balance:,} 円", inline=False)
+            total_balance += balance
+
+        embed.set_footer(text=f"合計資産: {total_balance:,} 円")
+        
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="history", description="最近のお金の動きの履歴を表示するぞ。")
+    @app_commands.describe(limit="表示する履歴の件数（1〜25件）")
+    async def history(self, interaction: discord.Interaction, limit: app_commands.Range[int, 1, 25] = 10):
+        user_id = interaction.user.id
+        
+        async with self.bot.db_pool.acquire() as conn:
+            records = await conn.fetch(
+                "SELECT transaction_type, category, amount, created_at FROM transactions WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2",
+                user_id, limit
+            )
+
+        if not records:
+            await interaction.response.send_message("まだ取引履歴がないようだ。", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title=f"最近の取引履歴 ({len(records)}件)",
+            color=discord.Color.green(),
+            timestamp=datetime.now(self.jst)
+        )
+
+        description_lines = []
+        for record in records:
+            dt_jst = record['created_at'].astimezone(self.jst)
+            time_str = dt_jst.strftime('%Y/%m/%d %H:%M')
+            
+            tx_type = record['transaction_type']
+            category = record['category']
+            amount = record['amount']
+
+            if tx_type == 'salary':
+                emoji = '💰'
+                details = f"給与収入: **+{amount:,}円**"
+            elif tx_type == 'spend':
+                emoji = '💸'
+                details = f"支出 ({category}): **-{amount:,}円**"
+            elif tx_type == 'transfer':
+                emoji = '🔄'
+                details = f"振替 ({category}): **{amount:,}円**"
+            else:
+                emoji = '🧾'
+                details = f"{tx_type} ({category}): {amount:,}円"
+
+            description_lines.append(f"`{time_str}` {emoji} {details}")
+
+        embed.description = "\n".join(description_lines)
+        
+        await interaction.response.send_message(embed=embed)
