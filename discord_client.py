@@ -536,6 +536,7 @@ class FinanceCog(commands.Cog):
     async def on_ready(self):
         logger.info("FinanceCog is ready.")
         self.weekly_balance_check.start()
+        self.daily_balance_report.start()
 
     def cog_unload(self):
         self.weekly_balance_check.cancel()
@@ -883,6 +884,73 @@ class FinanceCog(commands.Cog):
             description_lines.append(f"`{time_str}` {emoji} {details}")
 
         embed.description = "\n".join(description_lines)
-        embed.set_footer(text=get_captain_quote('report'))
-        
         await interaction.response.send_message(embed=embed)
+
+    @tasks.loop(time=time(12, 0, tzinfo=timezone(timedelta(hours=9))))
+    async def daily_balance_report(self):
+        logger.info("正午の残高レポートタスクを開始する。")
+        
+        try:
+            channel_id = self.bot.target_channel_ids[0]
+            channel = self.bot.get_channel(channel_id)
+            if not channel:
+                logger.error(f"残高レポート用のチャンネル {channel_id} が見つからん！")
+                return
+        except (IndexError, AttributeError):
+            logger.error("残高レポート用のチャンネルIDが設定されていない！")
+            return
+
+        async with self.bot.db_pool.acquire() as conn:
+            user_records = await conn.fetch("SELECT DISTINCT user_id FROM user_balances")
+            
+            if not user_records:
+                logger.info("残高レポート対象のユーザーが見つからなかった。")
+                return
+
+            for record in user_records:
+                user_id = record['user_id']
+                
+                try:
+                    user = await self.bot.fetch_user(user_id)
+                except discord.NotFound:
+                    logger.warning(f"ユーザーID {user_id} が見つからなかったため、残高レポートをスキップする。")
+                    continue
+
+                balance_records = await conn.fetch("SELECT category, balance FROM user_balances WHERE user_id = $1 ORDER BY category", user_id)
+
+                if not balance_records:
+                    continue
+
+                embed = discord.Embed(
+                    title=f"正午の財産状況レポートだ！",
+                    color=discord.Color.blue(),
+                    timestamp=datetime.now(self.jst)
+                )
+
+                total_balance = 0
+                wallet_order = ["ぬし財布", "ぽて財布", "探検隊予算", "貯金"]
+                balances = {r['category']: r['balance'] for r in balance_records}
+                
+                for wallet_name in wallet_order:
+                    if wallet_name in balances:
+                        balance = balances[wallet_name]
+                        embed.add_field(name=wallet_name, value=f"{balance:,} 円", inline=False)
+                        total_balance += balance
+                
+                other_wallets = {k: v for k, v in balances.items() if k not in wallet_order}
+                for wallet_name, balance in other_wallets.items():
+                    embed.add_field(name=wallet_name, value=f"{balance:,} 円", inline=False)
+                    total_balance += balance
+
+                embed.set_footer(text=f"合計資産: {total_balance:,} 円")
+                
+                try:
+                    await user.send(embed=embed)
+                    logger.info(f"ユーザー {user.display_name} ({user_id}) に残高レポートをDMで送信した。")
+                except discord.Forbidden:
+                    logger.warning(f"ユーザー {user.display_name} ({user_id}) へのDM送信に失敗。チャンネルに投稿する。")
+                    await channel.send(content=f"<@{user_id}>、DMが送れなかったため、ここに正午の財産状況を報告する！", embed=embed)
+                except Exception as e:
+                    logger.error(f"ユーザー {user.display_name} ({user_id}) への残高レポート送信中に予期せぬエラーが発生: {e}")
+
+        logger.info("正午の残高レポートタスクを完了した。")
