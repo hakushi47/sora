@@ -1,4 +1,4 @@
 Fetching latest commit info...
 Author: hareame1947
-Message: salaryコマンドの振り分けを修正
+Message: /balance (残高確認) コマンドと/history (取引履歴) コマンドno
 Git commit notification sent to Discord.

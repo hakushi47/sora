@@ -22,6 +22,8 @@ from discord import app_commands
 
 logger = logging.getLogger(__name__)
 
+WALLET_ORDER = ["ぬし財布", "ぽて財布", "探検隊予算", "貯金"]
+
 class SoraBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
