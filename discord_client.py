@@ -609,6 +609,12 @@ class FinanceCog(commands.Cog):
                     VALUES ($1, $2, $3)
                     ON CONFLICT (user_id, category) DO UPDATE SET balance = $3
                     """, user_id, target_wallet, amount)
+
+                # 取引履歴を記録
+                await conn.execute("""
+                    INSERT INTO transactions (user_id, transaction_type, category, amount)
+                    VALUES ($1, 'reset', $2, $3)
+                    """, user_id, target_wallet, amount)
                 
                 # 残高チェックの状態もリセット
                 await conn.execute("UPDATE balance_check_state SET state = NULL, input_nushi=NULL, input_pote=NULL, input_budget=NULL, input_savings=NULL, last_checked_at = NULL WHERE user_id = $1", user_id)
@@ -867,6 +873,9 @@ class FinanceCog(commands.Cog):
             elif tx_type == 'transfer':
                 emoji = '🔄'
                 details = f"振替 ({category}): **{amount:,}円**"
+            elif tx_type == 'reset':
+                emoji = '🔧'
+                details = f"残高リセット ({category}): **{amount:,}円** に設定"
             else:
                 emoji = '🧾'
                 details = f"{tx_type} ({category}): {amount:,}円"
@@ -874,5 +883,6 @@ class FinanceCog(commands.Cog):
             description_lines.append(f"`{time_str}` {emoji} {details}")
 
         embed.description = "\n".join(description_lines)
+        embed.set_footer(text=get_captain_quote('report'))
         
         await interaction.response.send_message(embed=embed)
