@@ -621,14 +621,14 @@ class FinanceCog(commands.Cog):
 
         user_id = interaction.user.id
 
-        # 金額をルールに基づいて振り分け
-        pote_wallet_amount = amount // 4
-        nushi_wallet_amount = amount // 4
+        # 新しいルールに基づいて金額を振り分け
+        nushi_wallet_amount = amount // 2
+        pote_wallet_amount = 0
         savings_amount = (amount * 3) // 10
         expedition_budget_amount = (amount * 2) // 10
         
         # 残りを貯金に加算
-        remainder = amount - pote_wallet_amount - nushi_wallet_amount - savings_amount - expedition_budget_amount
+        remainder = amount - nushi_wallet_amount - pote_wallet_amount - savings_amount - expedition_budget_amount
         savings_amount += remainder
 
         async with self.bot.db_pool.acquire() as conn:
