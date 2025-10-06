@@ -582,7 +582,7 @@ class FinanceCog(commands.Cog):
             await conn.execute("INSERT INTO balance_check_state (user_id, state) VALUES ($1, 'waiting_for_balance_ぬし財布') ON CONFLICT (user_id) DO UPDATE SET state = 'waiting_for_balance_ぬし財布', input_nushi=NULL, input_pote=NULL, input_budget=NULL, input_savings=NULL;", user_id)
         await interaction.response.send_message("🚨 残高チェックを開始する！まず【ぬし財布】の現在の残高を半角数字で入力せよ！", ephemeral=True)
 
-    @app_commands.command(name="reset", description="全残高をリセットし、指定した財布に指定金額を設定するぞ。")
+    @app_commands.command(name="reset", description="指定した財布の残高を、指定した金額に再設定するぞ。")
     @app_commands.describe(
         amount="設定する金額",
         wallet="金額を設定する財布"
@@ -603,16 +603,17 @@ class FinanceCog(commands.Cog):
         
         async with self.bot.db_pool.acquire() as conn:
             async with conn.transaction():
-                # 全ての財布の残高を削除
-                await conn.execute("DELETE FROM user_balances WHERE user_id = $1 AND category IN ('ぬし財布', 'ぽて財布', '探検隊予算', '貯金')", user_id)
-                
-                # 指定された財布に金額を設定
-                await conn.execute("INSERT INTO user_balances (user_id, category, balance) VALUES ($1, $2, $3)", user_id, target_wallet, amount)
+                # 指定された財布の残高を更新または挿入
+                await conn.execute("""
+                    INSERT INTO user_balances (user_id, category, balance)
+                    VALUES ($1, $2, $3)
+                    ON CONFLICT (user_id, category) DO UPDATE SET balance = $3
+                    """, user_id, target_wallet, amount)
                 
                 # 残高チェックの状態もリセット
                 await conn.execute("UPDATE balance_check_state SET state = NULL, input_nushi=NULL, input_pote=NULL, input_budget=NULL, input_savings=NULL, last_checked_at = NULL WHERE user_id = $1", user_id)
         
-        await interaction.response.send_message(f"よし！全残高をリセットし、**{target_wallet}** に **{amount}** 円を設定した。")
+        await interaction.response.send_message(f"よし！ **{target_wallet}** の残高を **{amount}** 円に再設定した。")
 
     @app_commands.command(name="salary", description="給料を受け取り、ルールに基づいて各財布に自動で振り分けるぞ。")
     @app_commands.describe(amount="受け取った給料の総額")

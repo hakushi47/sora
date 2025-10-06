@@ -1,4 +1,4 @@
 Fetching latest commit info...
 Author: hareame1947
-Message: /balance (残高確認) コマンドと/history (取引履歴) コマンドno
+Message: エラー修正
 Git commit notification sent to Discord.
