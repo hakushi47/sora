@@ -56,12 +56,13 @@ class SoraBot(commands.Bot):
 
             if Config.GUILD_ID:
                 guild = discord.Object(id=Config.GUILD_ID)
-                self.tree.copy_global_to(guild=guild)
+                self.tree.clear_commands(guild=guild)
                 await self.tree.sync(guild=guild)
-                logger.info(f"コマンドをギルド {Config.GUILD_ID} に同期しました。Botの準備完了です！")
+                logger.info(f"コマンドをギルド {Config.GUILD_ID} にクリア＆同期しました。Botの準備完了です！")
             else:
-                await self.tree.sync()
-                logger.info("グローバルコマンドを同期しました。Botの準備完了です！")
+                self.tree.clear_commands(guild=None)
+                await self.tree.sync(guild=None)
+                logger.info("グローバルコマンドをクリア＆同期しました。Botの準備完了です！")
 
         except Exception as e:
             logger.error("on_readyで致命的なエラーが発生しました。", exc_info=True)
