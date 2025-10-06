@@ -64,11 +64,6 @@ class SoraBot(commands.Bot):
         if message.author.id == self.user.id or not message.guild:
             return
 
-        ctx = await self.get_context(message)
-        if ctx.valid:
-            await self.invoke(ctx)
-            return
-
         user_id = message.author.id
         content = message.content.strip()
 
@@ -212,6 +207,8 @@ class SoraBot(commands.Bot):
         elif match := re.fullmatch(r"(.+)の中身は？", content):
             storage_name = match.group(1)
             await self.handle_list_items_in_storage(message, storage_name)
+
+        await self.process_commands(message)
 
     def run_bot(self):
         self.run(self.bot_token)
