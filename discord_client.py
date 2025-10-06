@@ -519,6 +519,10 @@ class FinanceCog(commands.Cog):
     def __init__(self, bot: SoraBot):
         self.bot = bot
         self.jst = timezone(timedelta(hours=9))
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        logger.info("FinanceCog is ready.")
         self.weekly_balance_check.start()
 
     def cog_unload(self):

@@ -1,4 +1,4 @@
 Fetching latest commit info...
 Author: hareame1947
-Message: fix: コマンドが反応しない問題を修正
+Message: fix: コマンド反応しない問題の修正
 Git commit notification sent to Discord.
