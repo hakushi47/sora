@@ -60,9 +60,13 @@ class SoraBot(commands.Bot):
         except Exception as e:
             logger.error("on_readyで致命的なエラーが発生しました。", exc_info=True)
 
-    @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.id == self.user.id or not message.guild:
+            return
+
+        ctx = await self.get_context(message)
+        if ctx.valid:
+            await self.invoke(ctx)
             return
 
         user_id = message.author.id
