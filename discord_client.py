@@ -44,25 +44,28 @@ class SoraBot(commands.Bot):
             except IndexError:
                 logger.error("KEYWORD_REACTIONSのフォーマットが不正です。'key:value,key2:value2' の形式で設定してください。")
 
+    async def setup_hook(self):
+        # Cogのロード
+        await self.add_cog(FinanceCog(self))
+        logger.info("FinanceCogをロードしました。")
+
+        # コマンドの同期
+        if Config.GUILD_ID:
+            guild = discord.Object(id=Config.GUILD_ID)
+            self.tree.copy_global_to(guild=guild)
+            await self.tree.sync(guild=guild)
+            logger.info(f"コマンドをギルド {Config.GUILD_ID} に同期しました。")
+        else:
+            await self.tree.sync()
+            logger.info("グローバルコマンドを同期しました。")
+
     async def on_ready(self):
         try:
             logger.info(">>>>>> 新バージョンのコードが正常に起動しました！<<<<<<")
             logger.info(f'{self.user} として監視を開始')
             await self.init_db() # DB初期化
             logger.info("データベースの初期化が完了しました。")
-
-            await self.add_cog(FinanceCog(self))
-            logger.info("FinanceCogをロードしました。")
-
-            if Config.GUILD_ID:
-                guild = discord.Object(id=Config.GUILD_ID)
-                self.tree.clear_commands(guild=guild)
-                await self.tree.sync(guild=guild)
-                logger.info(f"コマンドをギルド {Config.GUILD_ID} にクリア＆同期しました。Botの準備完了です！")
-            else:
-                self.tree.clear_commands(guild=None)
-                await self.tree.sync(guild=None)
-                logger.info("グローバルコマンドをクリア＆同期しました。Botの準備完了です！")
+            logger.info("Botの準備完了です！")
 
         except Exception as e:
             logger.error("on_readyで致命的なエラーが発生しました。", exc_info=True)
