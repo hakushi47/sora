@@ -54,8 +54,14 @@ class SoraBot(commands.Bot):
             await self.add_cog(FinanceCog(self))
             logger.info("FinanceCogをロードしました。")
 
-            await self.tree.sync()
-            logger.info("コマンドツリーを同期しました。Botの準備完了です！")
+            if Config.GUILD_ID:
+                guild = discord.Object(id=Config.GUILD_ID)
+                self.tree.copy_global_to(guild=guild)
+                await self.tree.sync(guild=guild)
+                logger.info(f"コマンドをギルド {Config.GUILD_ID} に同期しました。Botの準備完了です！")
+            else:
+                await self.tree.sync()
+                logger.info("グローバルコマンドを同期しました。Botの準備完了です！")
 
         except Exception as e:
             logger.error("on_readyで致命的なエラーが発生しました。", exc_info=True)
