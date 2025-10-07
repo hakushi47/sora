@@ -1,4 +1,0 @@
-Fetching latest commit info...
-Author: hareame1947
-Message: ƒGƒ‰[C³
-Git commit notification sent to Discord.
