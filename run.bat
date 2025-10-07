@@ -1,4 +1,8 @@
 @echo off
+
+rem Set console to UTF-8
+chcp 65001
+
 echo Discord キーワード収集Bot を開始します...
 echo.
 
@@ -11,6 +15,6 @@ if not exist .env (
 )
 
 REM PowerShellを使ってUTF-8でログを記録しつつ、コンソールにも表示
-powershell -Command "python -u main.py --schedule 2>&1 | Tee-Object -FilePath 'run_out.txt' -Encoding 'utf8'"
+powershell -Command "python -X utf8 main.py --schedule 2>&1 | Tee-Object -FilePath 'run_out.txt' -Encoding 'utf8'"
 
 pause

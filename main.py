@@ -13,12 +13,16 @@ from discord_client import SoraBot
 def setup_logging(debug=False):
     """ログ設定を初期化"""
     level = logging.DEBUG if debug else logging.INFO
+    # UTF-8エンコーディングを指定
+    stream_handler = logging.StreamHandler(sys.stdout)
+    stream_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+    
     logging.basicConfig(
         level=level,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         handlers=[
             logging.FileHandler('discord_bot.log', encoding='utf-8'),
-            logging.StreamHandler(sys.stdout)
+            stream_handler
         ]
     )
 
