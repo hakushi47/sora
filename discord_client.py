@@ -79,6 +79,10 @@ class SoraBot(commands.Bot):
         user_id = message.author.id
         content = message.content.strip()
 
+        if content.startswith("spend_webhook:"):
+            await self.handle_spend_webhook(message)
+            return
+
         # --- Step-by-step Weekly Balance Check ---
         async with self.db_pool.acquire() as conn:
             check_state_record = await conn.fetchrow("SELECT * FROM balance_check_state WHERE user_id = $1", user_id)
@@ -514,6 +518,66 @@ class SoraBot(commands.Bot):
         except ValueError: await message.add_reaction("🤔")
         except Exception as e:
             logger.error(f"活動の記録に失敗: {e}")
+            await message.add_reaction("❌")
+
+    async def handle_spend_webhook(self, message: discord.Message):
+        """Webhookからの支出記録メッセージを処理する"""
+        try:
+            # "spend_webhook: ぽて財布,食費,500" のような形式を想定
+            _, data = message.content.split(":", 1)
+            parts = [p.strip() for p in data.split(",")]
+            if len(parts) != 3:
+                await message.channel.send("Webhookのフォーマットが不正だ。`財布,カテゴリ,金額`の形式で頼む。")
+                return
+
+            source_wallet_name, category_name, amount_str = parts
+            
+            try:
+                amount = int(amount_str)
+            except ValueError:
+                await message.channel.send(f"金額「{amount_str}」は有効な数値ではないな。")
+                return
+
+            if amount <= 0:
+                await message.channel.send("支出額は正の数値を指定しろ！")
+                return
+
+            # Webhookメッセージは特定のユーザーに紐付かないため、設定ファイルからオーナーIDを取得する
+            if not Config.OWNER_ID:
+                await message.channel.send("エラー: `OWNER_ID`が設定されていません。")
+                return
+            user_id = Config.OWNER_ID
+
+            async with self.db_pool.acquire() as conn:
+                async with conn.transaction():
+                    current_balance_record = await conn.fetchrow("SELECT balance FROM user_balances WHERE user_id = $1 AND category = $2", user_id, source_wallet_name)
+                    current_balance = current_balance_record['balance'] if current_balance_record else 0
+
+                    if current_balance < amount:
+                        await message.channel.send(f"おい隊員！ {source_wallet_name} の残高が足りないぞ！ (現在: {current_balance}円)")
+                        return
+
+                    await conn.execute(
+                        'UPDATE user_balances SET balance = balance - $1 WHERE user_id = $2 AND category = $3',
+                        amount, user_id, source_wallet_name
+                    )
+
+                    await conn.execute(
+                        "INSERT INTO transactions (user_id, transaction_type, category, amount) VALUES ($1, 'spend', $2, $3);",
+                        user_id, category_name, amount
+                    )
+            
+            response_message = (
+                f"💸 {category_name} に {amount}円の支出を記録したぞ！ (Webhook経由)\n"
+                f"💳 支払元: {source_wallet_name}\n"
+                f"🫡 {get_captain_quote('spend')}"
+            )
+            await message.channel.send(response_message)
+            await message.add_reaction("✅")
+
+        except Exception as e:
+            logger.error(f"Webhook支出記録の処理中にエラーが発生: {e}", exc_info=True)
+            await message.channel.send("Webhookの処理中にエラーが発生した。")
             await message.add_reaction("❌")
 
 import random
