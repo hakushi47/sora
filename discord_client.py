@@ -521,28 +521,67 @@ class SoraBot(commands.Bot):
             await message.add_reaction("❌")
 
     async def handle_spend_webhook(self, message: discord.Message):
-        """Webhookからの支出記録メッセージを処理する"""
+        """Webhookからの支出記録メッセージを自然言語で処理する"""
         try:
-            # "spend_webhook: ぽて財布,食費,500" のような形式を想定
-            _, data = message.content.split(":", 1)
-            parts = [p.strip() for p in data.split(",")]
-            if len(parts) != 3:
-                await message.channel.send("Webhookのフォーマットが不正だ。`財布,カテゴリ,金額`の形式で頼む。")
-                return
+            _, text = message.content.split(":", 1)
+            text = text.strip()
 
-            source_wallet_name, category_name, amount_str = parts
+            source_wallet_name = None
+            category_name = None
+            amount = None
+
+            # 利用可能な財布とカテゴリのリスト
+            wallets = ["ぽて財布", "ぬし財布", "探検隊予算"]
+            categories = ["食費", "日用品", "交通費", "趣味", "交際費", "自己投資", "特別な支出", "その他"]
             
-            try:
+            wallet_pattern = f"({'|'.join(wallets)})"
+            category_pattern = f"({'|'.join(categories)})"
+            amount_pattern = r"(\d+)"
+
+            # パターン1: 「(財布)で(カテゴリ)に(金額)円」
+            match = re.search(rf"{wallet_pattern}で{category_pattern}に{amount_pattern}円", text)
+            if match:
+                source_wallet_name, category_name, amount_str = match.groups()
                 amount = int(amount_str)
-            except ValueError:
-                await message.channel.send(f"金額「{amount_str}」は有効な数値ではないな。")
+
+            # パターン2: 「(カテゴリ)に(金額)円、(財布)から」
+            if not match:
+                match = re.search(rf"{category_pattern}に{amount_pattern}円、{wallet_pattern}から", text)
+                if match:
+                    category_name, amount_str, source_wallet_name = match.groups()
+                    amount = int(amount_str)
+            
+            # パターン3: 財布の指定がない場合 「(カテゴリ)に(金額)円」
+            if not match:
+                match = re.search(rf"{category_pattern}に{amount_pattern}円", text)
+                if match:
+                    category_name, amount_str = match.groups()
+                    amount = int(amount_str)
+                    source_wallet_name = "ぽて財布" # デフォルト
+
+            # パターン4: 「(金額)円を(カテゴリ)として(財布)から」
+            if not match:
+                match = re.search(rf"{amount_pattern}円を{category_pattern}として{wallet_pattern}から", text)
+                if match:
+                    amount_str, category_name, source_wallet_name = match.groups()
+                    amount = int(amount_str)
+
+            # パターン5: 財布指定なし 「(金額)円を(カテゴリ)として」
+            if not match:
+                match = re.search(rf"{amount_pattern}円を{category_pattern}として", text)
+                if match:
+                    amount_str, category_name = match.groups()
+                    amount = int(amount_str)
+                    source_wallet_name = "ぽて財布" # デフォルト
+
+            if not all([source_wallet_name, category_name, amount]):
+                await message.channel.send("うーむ、支出の内容がうまく聞き取れなかった。もう一度試してみてくれ。\\n例: 「ぽて財布で食費に500円」")
                 return
 
             if amount <= 0:
                 await message.channel.send("支出額は正の数値を指定しろ！")
                 return
 
-            # Webhookメッセージは特定のユーザーに紐付かないため、設定ファイルからオーナーIDを取得する
             if not Config.OWNER_ID:
                 await message.channel.send("エラー: `OWNER_ID`が設定されていません。")
                 return
@@ -568,8 +607,8 @@ class SoraBot(commands.Bot):
                     )
             
             response_message = (
-                f"💸 {category_name} に {amount}円の支出を記録したぞ！ (Webhook経由)\n"
-                f"💳 支払元: {source_wallet_name}\n"
+                f"💸 {category_name} に {amount}円の支出を記録したぞ！ (Webhook経由)\\n"
+                f"💳 支払元: {source_wallet_name}\\n"
                 f"🫡 {get_captain_quote('spend')}"
             )
             await message.channel.send(response_message)
