@@ -727,6 +727,11 @@ class FinanceCog(commands.Cog):
                     VALUES ($1, 'spend', $2, $3);
                     ''', user_id, category_name, amount)
 
+        message = (
+            f"💸 {category_name} に {amount}円の支出を記録したぞ！\n"
+            f"💳 支払元: {source_wallet_name}\n"
+            f"🫡 {get_captain_quote('spend')}"
+        )
         await interaction.response.send_message(message)
 
     @app_commands.command(name="transfer", description="財布から別の財布へ資金を移動するぞ。")
