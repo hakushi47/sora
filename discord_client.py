@@ -398,6 +398,27 @@ class SoraBot(commands.Bot):
             await conn.execute('''CREATE TABLE IF NOT EXISTS messages (id BIGINT PRIMARY KEY, guild_id BIGINT, channel_id BIGINT, user_id BIGINT, content TEXT, created_at TIMESTAMP WITH TIME ZONE);''')
             await conn.execute('''CREATE TABLE IF NOT EXISTS user_balances (user_id BIGINT NOT NULL, category TEXT NOT NULL, balance BIGINT NOT NULL, PRIMARY KEY (user_id, category));''')
             await conn.execute('''CREATE TABLE IF NOT EXISTS transactions (id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL, transaction_type TEXT NOT NULL, category TEXT, amount BIGINT NOT NULL, created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP);''')
+
+            # transactionsテーブルにカラムが存在するか確認し、なければ追加
+            table_name = 'transactions'
+            columns_to_add = {
+                'source_wallet': 'TEXT',
+                'is_balance_reflected': 'BOOLEAN'
+            }
+            for column_name, column_type in columns_to_add.items():
+                column_exists = await conn.fetchval(f'''
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM pg_catalog.pg_attribute
+                        WHERE attrelid = '{table_name}'::regclass
+                        AND attname = '{column_name}'
+                        AND NOT attisdropped
+                    );
+                ''')
+                if not column_exists:
+                    await conn.execute(f'ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type};')
+                    logger.info(f"{table_name}テーブルに{column_name}カラムを追加しました。")
+
             
             # balance_check_stateテーブルを再作成
             await conn.execute('''DROP TABLE IF EXISTS balance_check_state;''')
@@ -781,7 +802,9 @@ class FinanceCog(commands.Cog):
     @app_commands.describe(
         amount="支出した金額",
         category="支出のカテゴリ",
-        from_wallet="どの財布から支払うか"
+        from_wallet="どの財布から支払うか",
+        reflect_balance="【任意】残高に反映させるか？デフォルトは「はい」。過去の支出を記録する際は「いいえ」を選択しろ。",
+        date="【任意】支出日をYYYY-MM-DD形式で指定。未指定の場合は本日日付となる。"
     )
     @app_commands.choices(
         category=[
@@ -798,9 +821,13 @@ class FinanceCog(commands.Cog):
             app_commands.Choice(name="ぽて財布", value="ぽて財布"),
             app_commands.Choice(name="ぬし財布", value="ぬし財布"),
             app_commands.Choice(name="探検隊予算", value="探検隊予算"),
+        ],
+        reflect_balance=[
+            app_commands.Choice(name="はい", value=1),
+            app_commands.Choice(name="いいえ", value=0),
         ]
     )
-    async def spend(self, interaction: discord.Interaction, amount: int, category: app_commands.Choice[str], from_wallet: app_commands.Choice[str] = None):
+    async def spend(self, interaction: discord.Interaction, amount: int, category: app_commands.Choice[str], from_wallet: app_commands.Choice[str] = None, reflect_balance: app_commands.Choice[int] = None, date: str = None):
         if amount <= 0:
             await interaction.response.send_message("おい隊員！支出額は正の数値を指定しろ！", ephemeral=True)
             return
@@ -808,33 +835,50 @@ class FinanceCog(commands.Cog):
         user_id = interaction.user.id
         category_name = category.value
         source_wallet_name = from_wallet.value if from_wallet else "ぽて財布"
+        
+        should_reflect = reflect_balance.value == 1 if reflect_balance is not None else True
+
+        # 取引日時を決定
+        transaction_time = datetime.now(self.jst)
+        if date:
+            try:
+                # YYYY-MM-DD形式を想定し、時刻は実行時のものを利用
+                now_time = datetime.now(self.jst).time()
+                transaction_time = datetime.strptime(date, "%Y-%m-%d").replace(hour=now_time.hour, minute=now_time.minute, second=now_time.second, tzinfo=self.jst)
+            except ValueError:
+                await interaction.response.send_message("日付の形式が正しくないようだ。`YYYY-MM-DD`の形式で入力してくれ。", ephemeral=True)
+                return
 
         async with self.bot.db_pool.acquire() as conn:
             async with conn.transaction():
-                # 現在の残高を取得
-                current_balance_record = await conn.fetchrow("SELECT balance FROM user_balances WHERE user_id = $1 AND category = $2", user_id, source_wallet_name)
-                current_balance = current_balance_record['balance'] if current_balance_record else 0
+                if should_reflect:
+                    current_balance_record = await conn.fetchrow("SELECT balance FROM user_balances WHERE user_id = $1 AND category = $2", user_id, source_wallet_name)
+                    current_balance = current_balance_record['balance'] if current_balance_record else 0
 
-                if current_balance < amount:
-                    await interaction.response.send_message(f"おい隊員！ {source_wallet_name} の残高が足りないぞ！ (現在: {current_balance}円)", ephemeral=True)
-                    return
+                    if current_balance < amount:
+                        await interaction.response.send_message(f"おい隊員！ {source_wallet_name} の残高が足りないぞ！ (現在: {current_balance}円)", ephemeral=True)
+                        return
 
-                # 残高を更新
-                await conn.execute('''
-                    UPDATE user_balances SET balance = balance - $1 WHERE user_id = $2 AND category = $3
-                    ''', amount, user_id, source_wallet_name)
+                    await conn.execute('''
+                        UPDATE user_balances SET balance = balance - $1 WHERE user_id = $2 AND category = $3
+                        ''', amount, user_id, source_wallet_name)
 
                 # 取引履歴を記録
                 await conn.execute('''
-                    INSERT INTO transactions (user_id, transaction_type, category, amount)
-                    VALUES ($1, 'spend', $2, $3);
-                    ''', user_id, category_name, amount)
+                    INSERT INTO transactions (user_id, transaction_type, category, amount, created_at, source_wallet, is_balance_reflected)
+                    VALUES ($1, 'spend', $2, $3, $4, $5, $6);
+                    ''', user_id, category_name, amount, transaction_time, source_wallet_name, should_reflect)
 
         message = (
             f"💸 {category_name} に {amount}円の支出を記録したぞ！\n"
+            f"🗓️ 日付: {transaction_time.strftime('%Y-%m-%d')}\n"
             f"💳 支払元: {source_wallet_name}\n"
-            f"🫡 {get_captain_quote('spend')}"
         )
+        if not should_reflect:
+            message += "過去の記録として登録したため、残高は変更されていない。\n"
+        
+        message += f"🫡 {get_captain_quote('spend')}"
+
         await interaction.response.send_message(message)
 
     @app_commands.command(name="transfer", description="財布から別の財布へ資金を移動するぞ。")
@@ -950,7 +994,7 @@ class FinanceCog(commands.Cog):
         
         async with self.bot.db_pool.acquire() as conn:
             records = await conn.fetch(
-                "SELECT transaction_type, category, amount, created_at FROM transactions WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2",
+                "SELECT id, transaction_type, category, amount, created_at, source_wallet, is_balance_reflected FROM transactions WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2",
                 user_id, limit
             )
 
@@ -972,13 +1016,16 @@ class FinanceCog(commands.Cog):
             tx_type = record['transaction_type']
             category = record['category']
             amount = record['amount']
+            tx_id = record['id']
 
             if tx_type == 'salary':
                 emoji = '💰'
                 details = f"給与収入: **+{amount:,}円**"
             elif tx_type == 'spend':
                 emoji = '💸'
-                details = f"支出 ({category}): **-{amount:,}円**"
+                source_wallet_info = f" (支払元: {record['source_wallet']})" if record['source_wallet'] else ""
+                balance_reflected_info = " (残高反映なし)" if record['is_balance_reflected'] == False else ""
+                details = f"支出 ({category}): **-{amount:,}円**{source_wallet_info}{balance_reflected_info}"
             elif tx_type == 'transfer':
                 emoji = '🔄'
                 details = f"振替 ({category}): **{amount:,}円**"
@@ -989,10 +1036,109 @@ class FinanceCog(commands.Cog):
                 emoji = '🧾'
                 details = f"{tx_type} ({category}): {amount:,}円"
 
-            description_lines.append(f"`{time_str}` {emoji} {details}")
+            description_lines.append(f"`{time_str}` `ID:{tx_id}` {emoji} {details}")
 
         embed.description = "\n".join(description_lines)
         await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="edit_spend", description="指定したIDの支出記録を修正するぞ。")
+    @app_commands.describe(
+        transaction_id="修正する支出の取引ID (`/history`で確認しろ)",
+        amount="【任意】新しい支出額",
+        category="【任意】新しい支出カテゴリ",
+        from_wallet="【任意】新しい支払元の財布",
+        date="【任意】新しい支出日 (YYYY-MM-DD)",
+        reflect_balance="【任意】残高への反映をどうするか"
+    )
+    @app_commands.choices(
+        category=[
+            app_commands.Choice(name="食費", value="食費"),
+            app_commands.Choice(name="日用品", value="日用品"),
+            app_commands.Choice(name="交通費", value="交通費"),
+            app_commands.Choice(name="趣味", value="趣味"),
+            app_commands.Choice(name="交際費", value="交際費"),
+            app_commands.Choice(name="自己投資", value="自己投資"),
+            app_commands.Choice(name="特別な支出", value="特別な支出"),
+            app_commands.Choice(name="その他", value="その他"),
+        ],
+        from_wallet=[
+            app_commands.Choice(name="ぽて財布", value="ぽて財布"),
+            app_commands.Choice(name="ぬし財布", value="ぬし財布"),
+            app_commands.Choice(name="探検隊予算", value="探検隊予算"),
+        ],
+        reflect_balance=[
+            app_commands.Choice(name="はい", value=1),
+            app_commands.Choice(name="いいえ", value=0),
+        ]
+    )
+    async def edit_spend(self, interaction: discord.Interaction,
+                         transaction_id: int,
+                         amount: int = None,
+                         category: app_commands.Choice[str] = None,
+                         from_wallet: app_commands.Choice[str] = None,
+                         date: str = None,
+                         reflect_balance: app_commands.Choice[int] = None):
+        
+        await interaction.response.defer(ephemeral=False)
+        user_id = interaction.user.id
+
+        try:
+            async with self.bot.db_pool.acquire() as conn:
+                async with conn.transaction():
+                    # 1. 元の取引情報を取得
+                    old_tx = await conn.fetchrow("SELECT * FROM transactions WHERE id = $1 AND user_id = $2 AND transaction_type = 'spend'", transaction_id, user_id)
+
+                    if not old_tx:
+                        raise ValueError("指定されたIDの支出取引が見つからないか、権限がないぞ。")
+
+                    # 2. 新しい取引情報を準備
+                    new_amount = amount if amount is not None else old_tx['amount']
+                    if new_amount <= 0:
+                        raise ValueError("支出額は正の数値を指定しろ！")
+
+                    new_category = category.value if category is not None else old_tx['category']
+                    new_wallet = from_wallet.value if from_wallet is not None else old_tx['source_wallet']
+                    
+                    if reflect_balance is None:
+                        new_reflect_balance = old_tx['is_balance_reflected']
+                    else:
+                        new_reflect_balance = True if reflect_balance.value == 1 else False
+
+                    new_time = old_tx['created_at']
+                    if date:
+                        try:
+                            original_time = old_tx['created_at'].astimezone(self.jst).time()
+                            new_time = datetime.strptime(date, "%Y-%m-%d").replace(hour=original_time.hour, minute=original_time.minute, second=original_time.second, tzinfo=self.jst)
+                        except ValueError:
+                            raise ValueError("日付の形式が正しくないようだ。`YYYY-MM-DD`の形式で入力してくれ。")
+
+                    # 3. 残高の巻き戻し
+                    if old_tx['is_balance_reflected'] and old_tx['source_wallet']:
+                         await conn.execute("UPDATE user_balances SET balance = balance + $1 WHERE user_id = $2 AND category = $3", old_tx['amount'], user_id, old_tx['source_wallet'])
+
+                    # 4. 残高の再適用
+                    if new_reflect_balance and new_wallet:
+                        current_balance_record = await conn.fetchrow("SELECT balance FROM user_balances WHERE user_id = $1 AND category = $2", user_id, new_wallet)
+                        current_balance = current_balance_record['balance'] if current_balance_record else 0
+                        if current_balance < new_amount:
+                            raise ValueError(f"新しい支払元 {new_wallet} の残高が足りない。")
+
+                        await conn.execute("UPDATE user_balances SET balance = balance - $1 WHERE user_id = $2 AND category = $3", new_amount, user_id, new_wallet)
+
+                    # 5. 取引記録の更新
+                    await conn.execute("""
+                        UPDATE transactions
+                        SET amount = $1, category = $2, source_wallet = $3, created_at = $4, is_balance_reflected = $5
+                        WHERE id = $6
+                    """, new_amount, new_category, new_wallet, new_time, new_reflect_balance, transaction_id)
+            
+            await interaction.followup.send(f"✅ 取引ID: {transaction_id} の支出記録を修正したぞ！")
+
+        except ValueError as e:
+            await interaction.followup.send(f"⚠️ {e}", ephemeral=True)
+        except Exception as e:
+            logger.error(f"取引修正(ID: {transaction_id})中に予期せぬエラー: {e}", exc_info=True)
+            await interaction.followup.send("予期せぬエラーにより、修正に失敗した。変更は取り消された。", ephemeral=True)
 
     @tasks.loop(time=time(12, 0, tzinfo=timezone(timedelta(hours=9))))
     async def daily_balance_report(self):
